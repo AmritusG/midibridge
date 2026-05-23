@@ -1,0 +1,109 @@
+# midibridge configuration -- copy this file to config.yaml and edit
+# for your install.
+
+xr18:
+  ip: 192.168.1.100      # your XR18's IP address
+  port: 10024            # XR18 OSC port (X-Air family uses 10024, NOT 10023)
+  local_port: 10024      # Pi's local UDP port for receiving updates
+                         # (must match XR18 port -- the mixer accepts control
+                         # only from clients whose source port is 10024)
+
+midi:
+  port_name: X-Touch-Ext # substring match for the Extender's MIDI port name
+
+# Fader mapping. Each Extender fader (1-8) drives one mixer target.
+# Targets:
+#   integer 1-16        = channel fader
+#   "lr"                = main LR (house master)
+#   "bus_1".."bus_6"    = aux/bus master
+#   "dca_1".."dca_4"    = DCA group master
+#   null                = inert (recognized but ignored)
+faders:
+  1: 1                   # channel 1
+  2: 2                   # channel 2
+  3: 3                   # channel 3
+  4: 4                   # channel 4
+  5: 5                   # channel 5
+  6: 6                   # channel 6
+  7: 7                   # channel 7
+  8: lr                  # main LR (house master)
+
+# Knob mapping. Knobs are *only* active when bridge is started with --setup,
+# unless lock_trim_in_operation_mode is set to false (see below).
+# Targets:
+#   "trim_1".."trim_16" = channel preamp gain (input trim, -12dB..+60dB)
+#   "bus_1".."bus_6"    = aux/bus master
+#   "dca_1".."dca_4"    = DCA group master
+#   null                = inert
+knobs:
+  1: trim_1
+  2: trim_2
+  3: trim_3
+  4: trim_4
+  5: trim_5
+  6: trim_6
+  7: trim_7
+  8: null
+
+# Mute mapping. Mute buttons toggle the target's mute. LEDs reflect mixer
+# state: lit = muted, dark = unmuted.
+# Targets:
+#   "mute_1".."mute_16" = channel mute
+#   "mute_lr"           = main LR mute (kills house audio)
+#   null                = inert
+mutes:
+  1: mute_1
+  2: mute_2
+  3: mute_3
+  4: mute_4
+  5: mute_5
+  6: mute_6
+  7: mute_7
+  8: mute_lr
+
+# Scribble strip labels and colors.
+#
+# Two forms accepted:
+#   N: ["TOP", "BOTTOM"]                                   # white bg, dark text
+#   N: {top: "TOP", bottom: "BOT", background: red,
+#       top_text: dark, bottom_text: dark}
+#
+# Colors: black, red, green, yellow, blue, magenta, cyan, white
+# Text shade: dark or light (light = inverted / outlined text)
+# Avoid black background -- it's unreadable on this LCD.
+# Max 7 ASCII chars per row.
+scribble:
+  1: {top: "Vocal",   bottom: "1",    background: magenta}
+  2: {top: "Vocal",   bottom: "2",    background: magenta}
+  3: {top: "Guitar",  bottom: "",     background: cyan}
+  4: {top: "Bass",    bottom: "",     background: cyan}
+  5: {top: "Drums",   bottom: "L",    background: yellow}
+  6: {top: "Drums",   bottom: "R",    background: yellow}
+  7: {top: "Stereo",  bottom: "IN",   background: blue,  top_text: light, bottom_text: light}
+  8: {top: "MASTER",  bottom: "LR",   background: red,   top_text: light, bottom_text: light}
+
+# HTTP debug server. Visit http://<pi-ip>:8080/debug
+debug_port: 8080
+
+# Mirror map: when a primary target is moved, secondary targets get
+# the same float value too. Use this if you want one fader to drive
+# multiple targets in lockstep.
+#
+# Example: route channels independently to Main AND to bus 1-6, then
+# enable this mirror so the Main fader drives all 7 masters together.
+# Comment out (or set to {}) if you don't need this.
+mirror: {}
+# mirror:
+#   lr: [bus_1, bus_2, bus_3, bus_4, bus_5, bus_6]
+
+# After sound check, set to true to lock trim knobs in operation mode.
+# Setup mode (bridge.py --setup) still works.
+# Lifecycle:
+#   1. Initial install: leave as false, dial in trim per channel
+#   2. Once trims are dialed in: change to true, restart service
+#   3. Future changes require ssh + manual --setup session
+lock_trim_in_operation_mode: false
+
+logging:
+  level: INFO            # DEBUG | INFO | WARNING | ERROR
+  ring_size: 500
