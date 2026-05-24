@@ -1,11 +1,11 @@
-"""Decode raw MIDI messages from the X-Touch Extender (MC mode).
+"""Decode raw MIDI messages from the X-Touch Extender (Ctrl mode).
 
 This module owns the *only* place where raw CC/note numbers are
 interpreted. Everything downstream sees named events. Per the
 project's standing rule on explicit index management, the maps are
 documented in CONTROL_MAP below.
 
-CONTROL_MAP — observed from the Extender in MC mode
+CONTROL_MAP — observed from the Extender in Ctrl mode
 ====================================================
 
   Strip 1..8 are channel strips, left-to-right on the device.
@@ -108,7 +108,7 @@ def decode(msg: mido.Message) -> Optional[Event]:
 
     if msg.type in ("note_on", "note_off"):
         n = msg.note
-        # In MC mode the Extender sometimes sends note_off, and sometimes
+        # In Ctrl mode the Extender sometimes sends note_off, and sometimes
         # note_on with velocity 0 for release. Normalise both.
         pressed = (msg.type == "note_on" and msg.velocity > 0)
 
@@ -127,5 +127,5 @@ def decode(msg: mido.Message) -> Optional[Event]:
         return UnknownEvent(raw=str(msg))
 
     # Pitchbend, aftertouch, sysex, clock etc. -- not used by the Extender
-    # in MC mode for the controls we care about.
+    # in Ctrl mode for the controls we care about.
     return UnknownEvent(raw=str(msg))

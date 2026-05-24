@@ -68,18 +68,22 @@ You may occasionally see addresses prefixed with `/M/` in packet captures (e.g. 
 
 ## Behringer X-Touch Extender USB MIDI
 
-### MCU mode vs Ctrl mode
+### MC mode vs Ctrl mode
 
-The Extender supports two modes: **MC** (Mackie Control extender) and **Ctrl** (raw CC). This bridge uses MC mode. Switch by holding the right Select button during power-on and following the LCD prompt.
+The Extender supports two modes: **MC** (Mackie Control extender) and **Ctrl** (Behringer's own protocol). **This bridge requires Ctrl mode.** In MC mode, the bridge appears connected over USB but no commands flow in either direction — Extender output is on different CCs/notes that the bridge doesn't decode, and the bridge's writes are on CCs the Extender doesn't react to. The Behringer scribble strip SysEx (the `00 20 32` manufacturer ID block, see below) is the one thing that works in both modes.
 
-### CC ranges
+To switch modes: power off the Extender, hold a Select button while powering on, and follow the on-LCD prompt to choose `Ctrl`. Setting persists across power cycles.
 
-In MC mode:
+If the Extender appears unresponsive to the bridge (no scribble paint, no motor sync, faders don't drive the mixer, mixer changes don't drive motors), check this first.
+
+### CC ranges (Ctrl mode)
+
+The bridge speaks Ctrl mode, so all CC numbers below apply only when the Extender is in Ctrl mode:
 
 | Control               | Direction | Note/CC base   | Per strip          |
 | --------------------- | --------- | -------------- | ------------------ |
-| Fader position        | TX (Pi→Ext) | Pitch bend ch N-1 | One channel per strip |
-| Fader move from user  | RX        | Pitch bend ch N-1 |                   |
+| Fader position        | TX (Pi→Ext) | CC 70-77 ch 0 | strip 1..8 = CC 70..77 |
+| Fader move from user  | RX        | CC 70-77 ch 0  | strip 1..8 = CC 70..77 |
 | Fader touch           | RX        | Note 104-111   | strip = note - 104+1 |
 | Encoder turn (rel)    | RX        | CC 16-23       | + value 1-63 = right, 65-127 = left |
 | Encoder press         | RX        | Note 32-39     |                    |
@@ -92,7 +96,9 @@ In MC mode:
 | Mute LED              | TX        | Note 16-23     | vel 127 = lit      |
 | Select LED            | TX        | Note 24-31     | vel 127 = lit      |
 
-Note: the decoder.py file uses different note number bases internally; verify against your actual hardware by capturing MIDI.
+Fader values are 7-bit (0-127) in Ctrl mode, not 14-bit like Mackie's pitch-bend convention. This means motor positioning has 1 part in 128 resolution — perceptually smooth but less granular than a true MCU surface.
+
+Note: verify the byte layout against your actual hardware by capturing MIDI; some firmware revisions may differ.
 
 ### Encoder ring LEDs — UNSOLVED
 
@@ -117,7 +123,7 @@ F0  00 20 32  15  4C  <track>  <colors>  <7 top bytes>  <7 bottom bytes>  F7
   - `L` = lower text shade
 - **`top` / `bottom`**: 7 ASCII bytes each, space-padded if shorter
 
-This works in MC mode despite the protocol being documented for "Ctrl" mode in the [Aldaviva BehringerXTouchExtender library](https://github.com/Aldaviva/BehringerXTouchExtender) (which is where we got the format from, with credit). 23 bytes total fixed length.
+This works in Ctrl mode, which matches the mode targeted by the [Aldaviva BehringerXTouchExtender library](https://github.com/Aldaviva/BehringerXTouchExtender) (where we got the format from, with credit). 23 bytes total fixed length.
 
 Black-on-black is unreadable (LCD has no backlight contrast). Avoid it.
 
@@ -129,8 +135,8 @@ The Vidvox "HAP Alpha" UI label maps to Hap5, not standalone HapA (this is unrel
 
 ## Open questions
 
-1. **Ring LED CC.** What's the right CC + encoding for external ring LED control on the X-Touch Extender in MC mode?
-2. **Full X-Touch.** Does this bridge work end-to-end on the full Behringer X-Touch (not Extender)? Scribble strip format may differ.
+1. **Ring LED CC.** What's the right CC + encoding for external ring LED control on the X-Touch Extender in Ctrl mode?
+2. **Full X-Touch.** Does this bridge work end-to-end on the full Behringer X-Touch (not Extender)? Scribble strip format and mode behavior may differ.
 3. **Channel meters.** The mixer streams `/meters/0` etc. via `/batchsubscribe`. Worth surfacing on the Extender's LED meter columns? (Untested.)
 
 PRs welcome on any of these.

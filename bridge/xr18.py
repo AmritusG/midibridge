@@ -48,10 +48,19 @@ class XR18Link:
 
     KEEPALIVE_INTERVAL_S = 8.0   # /xremote expires after 10 s
 
-    def __init__(self, ip: str, port: int = 10023, local_port: int = 10024):
+    def __init__(self, ip: str, port: int = 10023, local_port: int = 10024,
+                 mirror_destinations: Optional[list[tuple[str, int]]] = None):
         self.ip = ip
         self.port = port
         self.local_port = local_port
+        # Fan-out destinations: every OSC parameter write the bridge sends
+        # to the mixer is also sent to each of these (host, port) pairs.
+        # This is how we keep external clients (e.g. X-Air Edit) in sync,
+        # since the X-Air firmware does not actually deliver state-change
+        # notifications back to Edit even when Edit is "connected" -- Edit
+        # is a write-only client from the mixer's perspective.
+        # The /xremote keepalive is NOT mirrored (Edit doesn't subscribe).
+        self.mirror_destinations: list[tuple[str, int]] = mirror_destinations or []
 
         self._dispatcher = Dispatcher()
         # Catch every address family we care about. Each routes through
@@ -163,25 +172,37 @@ class XR18Link:
             address = target_to_address(target)
         except ValueError:
             return
-        self._send_raw(address)
+        self._send_raw(address, mirror=False)
 
     # ----- Internals -----------------------------------------------------
 
-    def _send_raw(self, address: str, *args) -> None:
+    def _send_raw(self, address: str, *args, mirror: bool = True) -> None:
         if self._server is None:
             return
         b = OscMessageBuilder(address=address)
         for a in args:
             b.add_arg(a)
+        dgram = b.build().dgram
         try:
-            self._server.socket.sendto(b.build().dgram, (self.ip, self.port))
+            self._server.socket.sendto(dgram, (self.ip, self.port))
         except (socket.error, OSError) as e:
             logger.warn("osc", "send failed (mixer unreachable?)",
                         address=address, err=str(e))
+        # Fan-out to mirror destinations so external clients (Edit) see
+        # bridge-induced changes. Only mirror parameter writes (mirror=True),
+        # never the /xremote keepalive or bare queries.
+        if mirror and args:
+            for (host, port) in self.mirror_destinations:
+                try:
+                    self._server.socket.sendto(dgram, (host, port))
+                except (socket.error, OSError) as e:
+                    logger.warn("osc", "mirror send failed",
+                                dest=f"{host}:{port}",
+                                address=address, err=str(e))
 
     def _keepalive_loop(self) -> None:
         while not self._stop.is_set():
-            self._send_raw("/xremote")
+            self._send_raw("/xremote", mirror=False)
             self._stop.wait(self.KEEPALIVE_INTERVAL_S)
 
     def _on_target_update(self, address: str, *args) -> None:

@@ -16,6 +16,11 @@ class XR18Config:
     ip: str
     port: int = 10023
     local_port: int = 10023
+    # Optional list of "host:port" strings. Every OSC parameter write the
+    # bridge sends to the mixer is also sent to each of these destinations.
+    # Use to keep external clients (e.g. X-Air Edit) in sync, since X-Air
+    # Edit does not subscribe to mixer notifications.
+    edit_mirror: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -114,10 +119,15 @@ def load(path: str | Path) -> Config:
     xr18_raw = raw.get("xr18") or {}
     if "ip" not in xr18_raw:
         raise ValueError("config: xr18.ip is required")
+    edit_mirror_raw = xr18_raw.get("edit_mirror") or []
+    if not isinstance(edit_mirror_raw, list):
+        raise ValueError("config: xr18.edit_mirror must be a list of 'host:port' strings")
+    edit_mirror = [str(s) for s in edit_mirror_raw]
     xr18 = XR18Config(
         ip=str(xr18_raw["ip"]),
         port=int(xr18_raw.get("port", 10023)),
         local_port=int(xr18_raw.get("local_port", 10024)),
+        edit_mirror=edit_mirror,
     )
 
     # MIDI

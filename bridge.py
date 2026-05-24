@@ -111,6 +111,20 @@ class SyncState:
         self.target_pos: dict[Target, float] = {}
         # Touch state per Extender strip (1..8)
         self.touched: dict[int, bool] = {i: False for i in range(1, 9)}
+        # Last user-driven FaderMove timestamp per strip (1..8).
+        # The X-Touch Extender in Ctrl mode does NOT send fader-touch
+        # events, so we infer "user is holding this fader" from a recent
+        # FaderMove. Used by the XR18 callback to suppress motor writes
+        # while the user is moving the fader (otherwise the mixer's echo
+        # of our own write loops back and fights the user's hand).
+        self.last_move: dict[int, float] = {i: 0.0 for i in range(1, 9)}
+        # Last bridge-issued motor write per strip: (midi_value, timestamp).
+        # The Extender echoes our motor-fader writes back on its input
+        # port as if the user had moved the fader. We use this to detect
+        # and ignore those echoes — otherwise they'd update last_move
+        # and trigger spurious user-suppression, breaking Edit -> Ext
+        # motor sync.
+        self.last_motor_write: dict[int, tuple[int, float]] = {}
         self.lock = threading.Lock()
 
 
@@ -127,6 +141,17 @@ def _fader_target_in_mode(state: SyncState, strip: int) -> Optional[Target]:
     if strip == 8:
         return f"bus_{bus}"
     return None
+
+
+def _send_motor_fader(state: SyncState, motor: extender.MotorOutput,
+                      strip: int, midi: int) -> None:
+    """Write a motor-fader command AND record it in state.last_motor_write.
+    The recorded write is consulted by the FaderMove handler to recognize
+    and ignore the Extender's echo of our own write (which would otherwise
+    appear to be a user move and trip recent-move suppression)."""
+    motor.send_fader(strip, midi)
+    with state.lock:
+        state.last_motor_write[strip] = (midi, time.time())
 
 
 def _scribble_for_strip(state: SyncState, scribble_cfg, strip: int):
@@ -181,7 +206,7 @@ def _refresh_extender_for_mode(state: SyncState, motor, scribble_cfg, link):
             link.query_target(target)
             continue
         midi = fader_position_to_midi(pos)
-        motor.send_fader(strip, midi)
+        _send_motor_fader(state, motor, strip, midi)
 
 
 def _enter_bus_mode(state, bus: int, motor, scribble_cfg, link):
@@ -207,6 +232,25 @@ def handle_midi_event(
 ) -> None:
     """Handle one decoded event from the Extender."""
     if isinstance(ev, FaderMove):
+        # Echo filter: the Extender mirrors our own motor-fader writes
+        # back as if the user had moved the fader. Detect and drop those
+        # — they don't represent user intent, and treating them as user
+        # moves would trip the recent-move suppression and block Edit ->
+        # Ext motor sync.
+        with state.lock:
+            recent_write = state.last_motor_write.get(ev.strip)
+        if recent_write is not None:
+            written_val, written_at = recent_write
+            if (ev.value == written_val
+                    and (time.time() - written_at) < 0.5):
+                # Echo of our own write. Clear so we don't suppress a
+                # subsequent legitimate user move at the same value.
+                with state.lock:
+                    state.last_motor_write.pop(ev.strip, None)
+                logger.debug("fader", "ignored self-echo",
+                             strip=ev.strip, value=ev.value)
+                return
+
         target = _fader_target_in_mode(state, ev.strip)
         if target is None:
             logger.info("fader", "move (reserved/inert)",
@@ -219,8 +263,17 @@ def handle_midi_event(
             # so without this the cached target_pos would lag behind
             # and the touch-release resync would snap the motor to a
             # stale value.
+            #
+            # Also stamp last_move[strip] so the XR18 callback can detect
+            # "user is actively moving this fader" and suppress motor
+            # writes for ~250ms after the last move — otherwise the
+            # mixer's echo of our own write fights the user's hand.
+            # (Ctrl-mode Extender doesn't send fader-touch events, so
+            # this is the only way to detect grab.)
+            now = time.time()
             with state.lock:
                 state.target_pos[target] = position
+                state.last_move[ev.strip] = now
             logger.info("fader", "move -> XR18",
                         strip=ev.strip, value=ev.value,
                         target=target_label(target), pos=f"{position:.3f}",
@@ -249,7 +302,7 @@ def handle_midi_event(
                     pos = state.target_pos.get(target)
                 if pos is not None:
                     midi = fader_position_to_midi(pos)
-                    motor.send_fader(ev.strip, midi)
+                    _send_motor_fader(state, motor, ev.strip, midi)
                     logger.debug("sync", "resync motor on release",
                                  strip=ev.strip,
                                  target=target_label(target),
@@ -282,7 +335,7 @@ def handle_midi_event(
 
     elif isinstance(ev, KnobPush):
         # Knob push is intentionally a no-op. The Extender's ring LEDs
-        # don't accept external CC control in MC mode (probed and
+        # don't accept external CC control in Ctrl mode (probed and
         # confirmed), so resetting trim via push would leave the ring
         # showing the old position -- confusing. Knob twists are the
         # canonical way to change trim; the Extender lights its own
@@ -368,18 +421,30 @@ def make_xr18_callback(state: SyncState, motor: extender.MotorOutput):
                         fader_strip = 8
             knob_strip = state.inverse_knob_map.get(target)
             mute_strip = state.inverse_mute_map.get(target)
+            # Suppress motor write if the user is actively manipulating
+            # this fader. Two cases:
+            #   - touched: the Extender sent a fader-touch event recently
+            #     (MC mode supports this; Ctrl mode does NOT)
+            #   - recent_move: a FaderMove arrived in the last 250 ms,
+            #     which is our Ctrl-mode-friendly stand-in for "touched"
             touched = state.touched.get(fader_strip, False) if fader_strip else False
+            recent_move = False
+            if fader_strip is not None:
+                last = state.last_move.get(fader_strip, 0.0)
+                recent_move = (time.time() - last) < 0.25
+            suppress = touched or recent_move
 
         midi = fader_position_to_midi(position)
 
-        if fader_strip is not None and not touched:
-            motor.send_fader(fader_strip, midi)
+        if fader_strip is not None and not suppress:
+            _send_motor_fader(state, motor, fader_strip, midi)
             logger.info("sync", "motor <- XR18",
                         strip=fader_strip, target=target_label(target),
                         pos=f"{position:.3f}", midi=midi)
-        elif fader_strip is not None and touched:
-            logger.debug("sync", "skip motor (touched)",
-                         strip=fader_strip, target=target_label(target))
+        elif fader_strip is not None and suppress:
+            logger.debug("sync", "skip motor (user moving)",
+                         strip=fader_strip, target=target_label(target),
+                         touched=touched, recent_move=recent_move)
 
         if knob_strip is not None:
             motor.send_ring(knob_strip, midi)
@@ -516,7 +581,25 @@ def main() -> int:
     apply_scribble(cfg, motor)
 
     # ----- XR18 link -----
-    link = XR18Link(cfg.xr18.ip, cfg.xr18.port, cfg.xr18.local_port)
+    # Parse edit_mirror "host:port" strings into (host, int(port)) tuples.
+    # Invalid entries are logged and skipped so a typo doesn't kill startup.
+    mirror_dests: list[tuple[str, int]] = []
+    for entry in cfg.xr18.edit_mirror:
+        if ":" not in entry:
+            logger.warn("config", "edit_mirror entry missing port, skipping",
+                        entry=entry)
+            continue
+        host, _, port_str = entry.rpartition(":")
+        try:
+            mirror_dests.append((host, int(port_str)))
+        except ValueError:
+            logger.warn("config", "edit_mirror entry has non-numeric port, skipping",
+                        entry=entry)
+    if mirror_dests:
+        logger.info("config", "edit_mirror enabled",
+                    destinations=[f"{h}:{p}" for (h, p) in mirror_dests])
+    link = XR18Link(cfg.xr18.ip, cfg.xr18.port, cfg.xr18.local_port,
+                    mirror_destinations=mirror_dests)
     link.set_target_callback(make_xr18_callback(state, motor))
     try:
         link.start()
@@ -588,7 +671,7 @@ def main() -> int:
                         midi = fader_position_to_midi(pos)
                         strip = state.inverse_fader_map.get(target)
                         if strip is not None:
-                            motor.send_fader(strip, midi)
+                            _send_motor_fader(state, motor, strip, midi)
                         knob = state.inverse_knob_map.get(target)
                         if knob is not None:
                             motor.send_ring(knob, midi)

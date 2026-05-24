@@ -187,8 +187,9 @@ class MotorOutput:
 #
 # Where:
 #   00 20 32  = Behringer manufacturer ID (NOT Mackie's 00 00 66 -- this
-#               is the single most important detail; the Extender ignores
-#               anything sent with the Mackie manufacturer ID in MC mode)
+#               is the single most important detail; the Extender uses
+#               its own manufacturer ID for scribble strips regardless
+#               of mode setting)
 #   15        = X-Touch Extender device ID (14 = full X-Touch)
 #   4C        = scribble command (constant)
 #   <track>   = 0..7, zero-indexed (legend on device is 1-indexed)
@@ -200,7 +201,10 @@ class MotorOutput:
 #   <7 top>   = top row ASCII, exactly 7 chars (pad with 0x20 spaces)
 #   <7 bot>   = bottom row ASCII, exactly 7 chars
 #
-# Confirmed working on Extender firmware 1.25 in MC mode.
+# Confirmed working on Extender firmware 1.25 in Ctrl mode.
+# This SysEx is one of the few commands that works the same in both
+# Ctrl and MC modes; the manufacturer ID is the disambiguator, not the
+# device mode.
 # Source: Aldaviva/BehringerXTouchExtender wiki, byte-for-byte verified
 # in our hardware probe.
 #

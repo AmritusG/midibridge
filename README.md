@@ -23,6 +23,12 @@ Use it to control your X-Air mixer from a physical fader surface — motorized f
 - **Debug HTTP** on port 8080 — visit `/debug` for live state, event ring buffer, and system info
 - **Operation vs Setup modes** — setup unlocks dangerous controls (trim, bus mode); operation mode locks them down so venue staff can use the surface safely
 
+## Important: Extender mode
+
+**The Extender must be in `Ctrl` mode, NOT `MC` mode.** This bridge speaks the Ctrl-mode protocol for faders, buttons, and LEDs. In MC mode the CC numbers shift and the bridge appears connected but nothing works in either direction — Extender input is ignored by the bridge, and the bridge's output (motors, LEDs, scribble strips) is ignored by the Extender.
+
+If the bridge seems "connected but dead" — scribbles wiped, faders move on the Extender but XR18 doesn't respond, mixer changes don't drive motors — check the mode first. It's the single most common cause of "nothing works." The mode is shown on the small LCD next to the encoders. Refer to the X-Touch Extender manual for the button sequence to switch modes; it's a power-on combination involving Select buttons.
+
 ## Why this exists
 
 The X-Touch Editor app (Behringer's official tool) can't talk to a standalone Extender — it expects an X-Touch main unit too. So the Extender's full feature set (motors, LEDs, scribbles) is essentially unreachable without custom software. The X-Air mixers expose a clean OSC API but nothing speaks MCU on the other side.
@@ -44,7 +50,15 @@ Should also work with: XR12, XR16, X18, XR-USB-Mixer (same OSC protocol). The Be
 
 Connect the X-Touch Extender to your Pi via USB. Plug both the Pi and the XR18 into the same network. Note the XR18's IP address (set a DHCP reservation or static IP — the bridge needs to know where to find it).
 
-### 2. Software
+### 2. Put the Extender into Ctrl mode (CRITICAL)
+
+This bridge speaks Behringer's raw-CC protocol, not Mackie MCU. The Extender must be in **Ctrl mode** before the bridge can talk to it.
+
+The Extender's mode is shown on the small LCD next to the encoders during startup. To change modes, refer to the X-Touch Extender manual for the exact button-combination during power-on for your firmware version — it's typically holding one or more Select buttons while powering on, then using the on-screen prompt to select **Ctrl** over **MC**. The setting persists across power cycles.
+
+If the bridge appears not to control the Extender at all (no scribble strips, no motor response, no input from faders), check this first — the Extender may have reverted to MC mode.
+
+### 3. Software
 
 ```bash
 ssh pi@raspberrypi.local
@@ -56,7 +70,7 @@ cp config.example.yaml config.yaml
 nano config.yaml  # edit XR18 IP address, customize mappings
 ```
 
-### 3. Try it manually
+### 4. Try it manually
 
 ```bash
 .venv/bin/python3 bridge.py --setup
@@ -113,9 +127,20 @@ A few hard-won discoveries are documented in [PROTOCOL.md](PROTOCOL.md):
 
 ## Known limitations
 
-- **LED rings around encoders don't accept external control in MC mode.** The CC 48-55 standard Mackie range is ignored; we probed CC ranges 16-127 on both MIDI channels 0 and 1 without finding the right one. The Extender lights its own rings locally during physical encoder turns, but external sync (e.g. when X-Air Edit changes a value) doesn't work. If you find the right protocol, please open an issue or PR.
+- **LED rings around encoders don't accept external control.** The CC 48-55 standard Mackie range is ignored; we probed CC ranges 16-127 on both MIDI channels 0 and 1 in Ctrl mode without finding the right one. The Extender lights its own rings locally during physical encoder turns, but external sync (e.g. when X-Air Edit changes a value) doesn't work. If you find the right protocol, please open an issue or PR.
 - The Behringer X-Touch (full version, not Extender) likely needs different SysEx for scribble strips and may need different CC ranges for some controls. Untested.
 - The bridge has no UI beyond the debug HTTP page. Reconfiguration requires editing YAML and restarting.
+
+## Changing IP addresses
+
+If you move the install to a new network (the XR18 or Pi gets a new IP), three things need a clean restart in this order for the OSC subscription to re-establish:
+
+1. **Update `config.yaml`** with the new XR18 IP.
+2. **Power-cycle the XR18.** Its `/xremote` subscriber list survives across IP changes on the client, so old stale entries pointing at the previous Pi IP can block notifications to the new one until the mixer is rebooted.
+3. **Restart the bridge service** on the Pi: `sudo systemctl restart midibridge`
+4. **Power-cycle the Extender** (and re-confirm Ctrl mode — see installation step 2).
+
+Skipping any of these often results in one-way operation (Ext→XR works, XR→Ext doesn't, or vice versa). The bridge logs `xr18_target=...` at startup so you can confirm it's pointed at the right address.
 
 ## Architecture
 
@@ -134,7 +159,7 @@ bridge/
 
 ## Credits
 
-The Behringer scribble strip protocol was reverse-engineered by [Aldaviva](https://github.com/Aldaviva) in the [BehringerXTouchExtender](https://github.com/Aldaviva/BehringerXTouchExtender) library. We use the byte format documented there, confirmed empirically to also work in MC mode.
+The Behringer scribble strip protocol was reverse-engineered by [Aldaviva](https://github.com/Aldaviva) in the [BehringerXTouchExtender](https://github.com/Aldaviva/BehringerXTouchExtender) library. We use the byte format documented there, applied to the Extender in Ctrl mode.
 
 Built by Amrit Stefan Anders Rosell with extensive help from Claude (Anthropic).
 
