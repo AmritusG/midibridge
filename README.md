@@ -4,12 +4,19 @@ A USB-MIDI to OSC bridge between the **Behringer X-Touch Extender** (or compatib
 
 Use it to control your X-Air mixer from a physical fader surface — motorized faders, mute LEDs, scribble strips, colored channel labels, the works. Runs on a Raspberry Pi (or any Linux box with USB) and just sits between the controller and the mixer on your network.
 
+Since v0.5 the bridge also acts as a **transparent OSC proxy** for software clients (X-Air Edit, Mixing Station, your own OSC software). Point those apps at the Pi instead of the mixer and they all stay in sync with each other AND with the physical fader surface — no per-client config, no IP gymnastics.
+
 ```
-   X-Touch Extender   <--USB MIDI-->   Raspberry Pi   <--OSC over UDP-->   XR18
-   (motorized faders,                  (this software)                    (mixer)
-    knobs, scribbles,
-    mute/select LEDs)
+   X-Touch Extender ──USB MIDI──┐
+                                │
+   X-Air Edit (Mac)  ──UDP──────┼──→  Raspberry Pi  ──UDP──→  XR18
+                                │     (this software)         (mixer)
+   Mixing Station (iOS)  ──UDP──┤
+                                │
+   any OSC client  ──UDP────────┘
 ```
+
+Drag a fader on any surface — every other surface mirrors instantly.
 
 ## Features
 
@@ -19,6 +26,7 @@ Use it to control your X-Air mixer from a physical fader surface — motorized f
 - **Colored scribble strips** — Behringer's proprietary SysEx protocol, fully documented in [PROTOCOL.md](PROTOCOL.md)
 - **Bus mode** — press Select 1-6 to enter "sends on fader" mode for each aux bus, perfect for dialing in room-fill or monitor mixes during sound check
 - **Master mirror** — make one fader drive multiple targets (e.g. Main LR + 6 aux bus masters in lockstep)
+- **Transparent OSC proxy** — multiple software clients (X-Air Edit, Mixing Station, custom OSC apps) point at the Pi and stay in live sync with each other and with the hardware surface. Auto-discovery, no per-client config
 - **Systemd service** for autostart on boot, with USB hotplug recovery and OSC port reuse on restart
 - **Debug HTTP** on port 8080 — visit `/debug` for live state, event ring buffer, and system info
 - **Operation vs Setup modes** — setup unlocks dangerous controls (trim, bus mode); operation mode locks them down so venue staff can use the surface safely
@@ -35,10 +43,12 @@ The X-Touch Editor app (Behringer's official tool) can't talk to a standalone Ex
 
 This bridge fills that gap. Plug the Extender into a Pi, point it at your mixer, get a real fader surface.
 
+As a bonus, **the proxy also works around a long-standing limitation of X-Air Edit and Mixing Station**: those apps don't subscribe to mixer notifications properly, so they never see state changes made by other clients (other apps, hardware surfaces, automation). Through this bridge they do — because the bridge subscribes on their behalf and fans state out to every connected client.
+
 ## Hardware tested
 
 - **Controller:** Behringer X-Touch Extender (USB MIDI, class-compliant)
-- **Mixer:** Behringer XR18 (firmware 1.21)
+- **Mixer:** Behringer XR18 (firmware 1.25)
 - **Bridge:** Raspberry Pi 4 (8GB), Raspberry Pi OS Bookworm 64-bit
 - **Network:** wired Ethernet (Wi-Fi works but adds latency)
 
@@ -62,7 +72,7 @@ If the bridge appears not to control the Extender at all (no scribble strips, no
 
 ```bash
 ssh pi@raspberrypi.local
-git clone https://github.com/YOUR-USERNAME/midibridge.git ~/midibridge
+git clone https://github.com/AmritusG/midibridge.git ~/midibridge
 cd ~/midibridge
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
@@ -88,6 +98,20 @@ journalctl -u midibridge -f
 ```
 
 The bridge now starts on boot and restarts on crash.
+
+## Connecting software clients (X-Air Edit, Mixing Station, etc.)
+
+The bridge is a transparent OSC proxy on UDP port 10024. Any OSC software client can connect through it, and clients that connect through the bridge see each other's state changes live.
+
+**Point the client at the Pi's IP, not the mixer's.**
+
+- **X-Air Edit**: in the Connection panel, click Rescan. The Pi appears in the scan list with the same name as your mixer (Behringer's discovery protocol embeds the device name; the bridge passes that through but rewrites the IP). Pick the entry with the Pi's IP and click Connect. If the Pi doesn't show up at first, fully quit and relaunch Edit (it caches scan results aggressively — you'll need to do this whenever the bridge restarts too).
+- **Mixing Station** (iOS/Android): in the mixer selection screen, manually enter the Pi's IP, or let auto-discovery find it and pick the Pi entry from the list.
+- **Custom OSC software**: send your OSC packets to `<pi-ip>:10024` instead of `<mixer-ip>:10024`. Subscribe via `/xremote` if you want state notifications — the bridge will pass them along.
+
+Connecting an app directly to the mixer still works fine — the bridge is opt-in, not mandatory. But apps connected directly won't see state changes made via other clients (this is a Behringer limitation, not the bridge's).
+
+Auto-discovery learns about each client on its first packet and expires unused clients after 60 seconds of silence.
 
 ## Configuration
 
@@ -123,24 +147,13 @@ A few hard-won discoveries are documented in [PROTOCOL.md](PROTOCOL.md):
 - Asymmetric zero-padding: `/ch/01/...` is padded, but `/bus/1/...` and `/dca/1/...` are not
 - Behringer scribble strips use a proprietary SysEx format with manufacturer ID `00 20 32` (not the Mackie ID `00 00 66`)
 - The mixer notifies subscribers of channel sends at `/ch/NN/mix/MM/level` (with trailing `/level`), but you write to `/ch/NN/mix/MM` (no suffix)
-- Headamp gain notifications go through `/xremote` correctly but were initially missed because the protocol allows multiple address forms
+- X-Air Edit and Mixing Station don't honestly subscribe via `/xremote`, which is why state changes from other clients never reach them when connected directly to the mixer. The bridge fixes this by subscribing on their behalf and fanning state out.
 
 ## Known limitations
 
 - **LED rings around encoders don't accept external control.** The CC 48-55 standard Mackie range is ignored; we probed CC ranges 16-127 on both MIDI channels 0 and 1 in Ctrl mode without finding the right one. The Extender lights its own rings locally during physical encoder turns, but external sync (e.g. when X-Air Edit changes a value) doesn't work. If you find the right protocol, please open an issue or PR.
 - The Behringer X-Touch (full version, not Extender) likely needs different SysEx for scribble strips and may need different CC ranges for some controls. Untested.
 - The bridge has no UI beyond the debug HTTP page. Reconfiguration requires editing YAML and restarting.
-
-## Changing IP addresses
-
-If you move the install to a new network (the XR18 or Pi gets a new IP), three things need a clean restart in this order for the OSC subscription to re-establish:
-
-1. **Update `config.yaml`** with the new XR18 IP.
-2. **Power-cycle the XR18.** Its `/xremote` subscriber list survives across IP changes on the client, so old stale entries pointing at the previous Pi IP can block notifications to the new one until the mixer is rebooted.
-3. **Restart the bridge service** on the Pi: `sudo systemctl restart midibridge`
-4. **Power-cycle the Extender** (and re-confirm Ctrl mode — see installation step 2).
-
-Skipping any of these often results in one-way operation (Ext→XR works, XR→Ext doesn't, or vice versa). The bridge logs `xr18_target=...` at startup so you can confirm it's pointed at the right address.
 
 ## Architecture
 
@@ -151,11 +164,18 @@ bridge/
   targets.py           — target type system (channel/bus/dca/trim/mute/send)
   decoder.py           — MIDI → event objects
   extender.py          — MIDI port management, motor/LED/scribble output
-  xr18.py              — OSC client, /xremote keepalive, dispatcher
+  xr18.py              — transparent OSC proxy + /xremote subscriber
+                         (raw UDP socket, byte-level forwarding)
   logger.py            — structured logger with ring buffer
   debug_http.py        — debug page server
   watchdog.py          — USB MIDI presence monitor
 ```
+
+The OSC layer (`bridge/xr18.py`) does three things in a single read loop:
+
+1. **Subscribes to the mixer** via `/xremote` keepalive every 8 seconds, so the bridge always receives parameter notifications. Those notifications drive the Extender's motors.
+2. **Forwards client traffic** transparently in both directions. Packets from a client get forwarded to the mixer as raw bytes; packets from the mixer get forwarded to every known client as raw bytes. Original packet bytes are preserved so the bridge stays protocol-agnostic for OSC features it doesn't itself implement (X-Air's `/node/...` bulk-state replies, EQ/FX/dynamics parameters, anything else).
+3. **Rewrites discovery replies** so the Pi appears as a separate mixer in client scan lists. Without this, clients would dedupe the bridge's relayed reply against the mixer's direct reply (same IP in payload) and show only the real mixer.
 
 ## Credits
 

@@ -581,25 +581,7 @@ def main() -> int:
     apply_scribble(cfg, motor)
 
     # ----- XR18 link -----
-    # Parse edit_mirror "host:port" strings into (host, int(port)) tuples.
-    # Invalid entries are logged and skipped so a typo doesn't kill startup.
-    mirror_dests: list[tuple[str, int]] = []
-    for entry in cfg.xr18.edit_mirror:
-        if ":" not in entry:
-            logger.warn("config", "edit_mirror entry missing port, skipping",
-                        entry=entry)
-            continue
-        host, _, port_str = entry.rpartition(":")
-        try:
-            mirror_dests.append((host, int(port_str)))
-        except ValueError:
-            logger.warn("config", "edit_mirror entry has non-numeric port, skipping",
-                        entry=entry)
-    if mirror_dests:
-        logger.info("config", "edit_mirror enabled",
-                    destinations=[f"{h}:{p}" for (h, p) in mirror_dests])
-    link = XR18Link(cfg.xr18.ip, cfg.xr18.port, cfg.xr18.local_port,
-                    mirror_destinations=mirror_dests)
+    link = XR18Link(cfg.xr18.ip, cfg.xr18.port, cfg.xr18.local_port)
     link.set_target_callback(make_xr18_callback(state, motor))
     try:
         link.start()
