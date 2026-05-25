@@ -177,6 +177,23 @@ The OSC layer (`bridge/xr18.py`) does three things in a single read loop:
 2. **Forwards client traffic** transparently in both directions. Packets from a client get forwarded to the mixer as raw bytes; packets from the mixer get forwarded to every known client as raw bytes. Original packet bytes are preserved so the bridge stays protocol-agnostic for OSC features it doesn't itself implement (X-Air's `/node/...` bulk-state replies, EQ/FX/dynamics parameters, anything else).
 3. **Rewrites discovery replies** so the Pi appears as a separate mixer in client scan lists. Without this, clients would dedupe the bridge's relayed reply against the mixer's direct reply (same IP in payload) and show only the real mixer.
 
+## Convenience aliases
+
+For quick command-line management of the bridge from your laptop, [`scripts/aliases.sh`](scripts/aliases.sh) defines a handful of shell aliases. Append it to your `~/.zshrc` (or `~/.bashrc`), reload your shell, and you get:
+
+| Alias | Action |
+|---|---|
+| `mdd` | SSH into the Pi |
+| `mdd-cfg` | edit `config.yaml` on the Pi in nano |
+| `mdd-restart` | restart the bridge service + show 10 fresh log lines |
+| `mdd-status` | service health summary |
+| `mdd-log` | tail journal live (Ctrl+C to exit) |
+| `mdd-tail` | last 30 journal lines |
+| `mdd-trim` | unlock trim knobs interactively for sound check |
+| `mdd-lock` / `mdd-unlock` | permanently flip the `lock_trim_in_operation_mode` flag and restart |
+
+Edit the three host/user/path variables at the top of the script to match your Pi's setup.
+
 ## Credits
 
 The Behringer scribble strip protocol was reverse-engineered by [Aldaviva](https://github.com/Aldaviva) in the [BehringerXTouchExtender](https://github.com/Aldaviva/BehringerXTouchExtender) library. We use the byte format documented there, applied to the Extender in Ctrl mode.
