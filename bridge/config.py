@@ -13,7 +13,10 @@ from .targets import Target, parse_target
 
 @dataclass
 class XR18Config:
-    ip: str
+    # Mixer IP. May be:
+    #   - a literal IPv4 address (e.g. "192.168.1.100"): static config
+    #   - "auto" or None: discover via /xinfo broadcast at startup
+    ip: Optional[str] = None
     port: int = 10023
     local_port: int = 10023
 
@@ -112,10 +115,14 @@ def load(path: str | Path) -> Config:
 
     # XR18
     xr18_raw = raw.get("xr18") or {}
-    if "ip" not in xr18_raw:
-        raise ValueError("config: xr18.ip is required")
+    raw_ip = xr18_raw.get("ip")
+    # Normalize: "auto", "", None, or missing -> discovery mode
+    if raw_ip is None or str(raw_ip).strip().lower() in ("", "auto"):
+        ip: Optional[str] = None
+    else:
+        ip = str(raw_ip).strip()
     xr18 = XR18Config(
-        ip=str(xr18_raw["ip"]),
+        ip=ip,
         port=int(xr18_raw.get("port", 10023)),
         local_port=int(xr18_raw.get("local_port", 10024)),
     )

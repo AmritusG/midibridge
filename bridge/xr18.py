@@ -60,6 +60,75 @@ def fader_position_to_midi(position: float) -> int:
     return int(round(position * 127))
 
 
+def discover_mixer(port: int = 10024,
+                   total_timeout: float = 5.0,
+                   per_attempt_timeout: float = 1.0) -> Optional[str]:
+    """Discover an X-Air mixer on the LAN via /xinfo broadcast.
+
+    Broadcasts /xinfo to 255.255.255.255 (limited broadcast) on the
+    given UDP port. Any X-Air mixer on the same subnet replies with
+    /xinfo ,ssss <ip> <name> <model> <fw>. Returns the IP the mixer
+    reports for itself (parsed out of the reply, not the source IP --
+    the mixer's own self-reported IP is what other X-Air apps trust).
+
+    Returns None if no mixer replies within total_timeout seconds.
+    Retries the broadcast every per_attempt_timeout seconds until
+    either a reply arrives or the total budget is exhausted.
+
+    Caller can fall back to a static IP if this returns None.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        # We bind to an ephemeral local port -- the mixer will reply
+        # to our source port, NOT the port we send to.
+        sock.bind(("0.0.0.0", 0))
+        sock.settimeout(per_attempt_timeout)
+
+        # Build the probe: bare /xinfo with no args.
+        b = OscMessageBuilder(address="/xinfo")
+        probe = b.build().dgram
+
+        deadline = time.time() + total_timeout
+        while time.time() < deadline:
+            try:
+                sock.sendto(probe, ("255.255.255.255", port))
+            except (socket.error, OSError) as e:
+                logger.warn("osc", "discovery broadcast failed", err=str(e))
+                return None
+            try:
+                dgram, src = sock.recvfrom(65535)
+            except socket.timeout:
+                continue
+            # Parse the reply. Expected format:
+            #   /xinfo  ,ssss  <ip>  <name>  <model>  <fw>
+            try:
+                packet = OscPacket(dgram)
+            except (ParseError, Exception):
+                continue
+            for msg in packet.messages:
+                if msg.message.address != "/xinfo":
+                    continue
+                params = list(msg.message.params)
+                if len(params) >= 1 and isinstance(params[0], str):
+                    reported_ip = params[0].strip()
+                    name = params[1] if len(params) > 1 else "?"
+                    model = params[2] if len(params) > 2 else "?"
+                    fw = params[3] if len(params) > 3 else "?"
+                    logger.info(
+                        "osc", "mixer discovered",
+                        ip=reported_ip, name=name, model=model,
+                        firmware=fw, src=f"{src[0]}:{src[1]}",
+                    )
+                    return reported_ip
+        return None
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+
 # Callback signature for any target's incoming position update.
 TargetUpdateCallback = Callable[[Target, float], None]
 

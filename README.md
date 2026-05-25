@@ -117,7 +117,8 @@ Auto-discovery learns about each client on its first packet and expires unused c
 
 See `config.example.yaml` for the full annotated config. Key sections:
 
-- **`xr18`** — mixer IP and OSC port (10024 for X-Air family, not 10023)
+- **`xr18.ip`** — mixer IP. Either a literal address (e.g. `192.168.1.100`) or `auto` (the default, also used if the field is omitted) to discover the mixer on the LAN at startup via `/xinfo` broadcast. Static is faster to start and predictable; `auto` makes the install plug-and-play across networks.
+- **`xr18.port`** / **`xr18.local_port`** — OSC ports (10024 for X-Air family, not 10023)
 - **`midi.port_name`** — substring match for the Extender's MIDI port name
 - **`faders`** — strip 1-8 → channel/lr/bus/dca target
 - **`knobs`** — strip 1-8 → trim or other target (only active with `--setup`)
@@ -125,6 +126,10 @@ See `config.example.yaml` for the full annotated config. Key sections:
 - **`scribble`** — strip labels, background colors, text shade
 - **`mirror`** — fan out one fader's value to multiple targets (e.g. Main → all 6 aux buses)
 - **`lock_trim_in_operation_mode`** — set `true` to require `--setup` for trim adjustments
+
+### Plug-and-play deployment
+
+With `xr18.ip: auto`, the bridge does broadcast discovery at startup and uses the first X-Air mixer that replies. Combined with DHCP for both the Pi and the mixer, the install requires zero IP configuration: power up on any network, and Edit, Mixing Station, and any other OSC client can scan-and-find the Pi (which in turn has scan-and-found the mixer). If multiple X-Air mixers are on the same LAN, the bridge picks whichever replies first — use a static IP in that case to pin to a specific one.
 
 ## Bus mode (sends on fader)
 

@@ -32,6 +32,7 @@ from bridge.decoder import (
 from bridge.targets import Target, target_label
 from bridge.xr18 import (
     XR18Link, midi_to_fader_position, fader_position_to_midi,
+    discover_mixer,
 )
 
 
@@ -581,7 +582,30 @@ def main() -> int:
     apply_scribble(cfg, motor)
 
     # ----- XR18 link -----
-    link = XR18Link(cfg.xr18.ip, cfg.xr18.port, cfg.xr18.local_port)
+    # Resolve mixer IP. If config provided a static IP we use it; if it
+    # asked for auto-discovery (ip: null / "auto" / missing), broadcast
+    # /xinfo and use the first responder.
+    mixer_ip = cfg.xr18.ip
+    if mixer_ip is None:
+        logger.info("config", "xr18.ip not set, attempting auto-discovery")
+        mixer_ip = discover_mixer(port=cfg.xr18.port)
+        if mixer_ip is None:
+            print(
+                "\nERROR: no XR18 found on the network via /xinfo broadcast.\n"
+                "Either no mixer is reachable, or this machine cannot send\n"
+                "subnet broadcasts (some Wi-Fi networks block them). Edit\n"
+                "config.yaml and set xr18.ip to the mixer's IP directly.",
+                file=sys.stderr,
+            )
+            port_in.close()
+            motor.close()
+            debug_srv.stop()
+            return 4
+        logger.info("config", "using discovered mixer", ip=mixer_ip)
+    else:
+        logger.info("config", "using static mixer IP from config", ip=mixer_ip)
+
+    link = XR18Link(mixer_ip, cfg.xr18.port, cfg.xr18.local_port)
     link.set_target_callback(make_xr18_callback(state, motor))
     try:
         link.start()

@@ -2,7 +2,12 @@
 # for your install.
 
 xr18:
-  ip: 192.168.1.100      # your XR18's IP address
+  ip: auto               # mixer IP. Use a literal address (e.g. "192.168.1.100")
+                         # for a fixed install, or "auto" (default if omitted) to
+                         # discover the mixer on the LAN at startup via /xinfo
+                         # broadcast. Auto-discovery picks the first X-Air mixer
+                         # that replies -- set a static IP if you have more than
+                         # one mixer on the same network.
   port: 10024            # XR18 OSC port (X-Air family uses 10024, NOT 10023)
   local_port: 10024      # Pi's local UDP port for receiving updates
                          # (must match XR18 port -- the mixer accepts control
