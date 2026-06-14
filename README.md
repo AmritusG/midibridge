@@ -203,7 +203,7 @@ Edit the three host/user/path variables at the top of the script to match your P
 
 The Behringer scribble strip protocol was reverse-engineered by [Aldaviva](https://github.com/Aldaviva) in the [BehringerXTouchExtender](https://github.com/Aldaviva/BehringerXTouchExtender) library. We use the byte format documented there, applied to the Extender in Ctrl mode.
 
-Built by Amrit Stefan Anders Rosell with extensive help from Claude (Anthropic).
+Built by Amritus with extensive help from Claude (Anthropic).
 
 ## License
 
