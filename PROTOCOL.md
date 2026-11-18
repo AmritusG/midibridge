@@ -33,10 +33,17 @@ Use the right form or the mixer ignores the write.
 | DCA master       | `/dca/N/fader`             | float   | 0.0–1.0               |
 | Preamp gain      | `/headamp/NN/gain`         | float   | 0.0–1.0 (= −12…+60 dB)|
 | Channel send     | `/ch/NN/mix/MM`            | float   | 0.0–1.0               |
+| Channel FX send  | `/ch/NN/mix/07..10/level`  | float   | 0.0–1.0 (FX 1-4)      |
+| FX type          | `/fx/N/type`               | int     | 0–60 (0-9 = reverbs)  |
+| FX parameter     | `/fx/N/par/01..64`         | float/int | 0.0–1.0; enums int  |
+| FX return        | `/rtn/N/mix/on`, `/lr`, `/fader` | int/int/float |              |
+| FX send master   | `/fxsend/N/mix/on`, `/fader` | int/float |                    |
 | Channel mute     | `/ch/NN/mix/on`            | int     | 0 or 1 (1 = unmuted)  |
 | LR mute          | `/lr/mix/on`               | int     | 0 or 1                |
 
 The mute value is inverted from intuition: `on=1` means "channel is on, audio passes," not "channel is muted."
+
+FX addresses, type numbers and per-reverb parameter tables (with sources) are in [docs/FX-NOTES.md](docs/FX-NOTES.md).
 
 ### Notification address vs write address
 
@@ -102,21 +109,20 @@ If the Extender appears unresponsive to the bridge (no scribble paint, no motor 
 
 The bridge speaks Ctrl mode, so all CC numbers below apply only when the Extender is in Ctrl mode:
 
+This table matches `bridge/decoder.py`, which was captured from the hardware. An earlier version of this table had the encoder and button rows wrong.
+
 | Control               | Direction | Note/CC base   | Per strip          |
 | --------------------- | --------- | -------------- | ------------------ |
 | Fader position        | TX (Pi→Ext) | CC 70-77 ch 0 | strip 1..8 = CC 70..77 |
 | Fader move from user  | RX        | CC 70-77 ch 0  | strip 1..8 = CC 70..77 |
-| Fader touch           | RX        | Note 104-111   | strip = note - 104+1 |
-| Encoder turn (rel)    | RX        | CC 16-23       | + value 1-63 = right, 65-127 = left |
-| Encoder press         | RX        | Note 32-39     |                    |
-| Rec button            | RX        | Note 0-7       |                    |
-| Solo button           | RX        | Note 8-15      |                    |
-| Mute button           | RX        | Note 16-23     |                    |
-| Select button         | RX        | Note 24-31     |                    |
-| Rec LED               | TX        | Note 0-7       | vel 127 = lit      |
-| Solo LED              | TX        | Note 8-15      | vel 127 = lit      |
-| Mute LED              | TX        | Note 16-23     | vel 127 = lit      |
-| Select LED            | TX        | Note 24-31     | vel 127 = lit      |
+| Fader touch           | RX        | Note 110-117   | (not sent in Ctrl mode, see below) |
+| Encoder turn (abs)    | RX        | CC 80-87       | absolute 0-127 (Ctrl mode; CtrlRel is relative) |
+| Encoder ring          | TX        | CC 80-87       | 0-127, same CC as the turn (unconfirmed, see below) |
+| Encoder press         | RX        | Note 0-7       | vel 127 = press, 0/note_off = release |
+| Rec button / LED      | RX / TX   | Note 8-15      | vel 127 = lit      |
+| Solo button / LED     | RX / TX   | Note 16-23     | vel 127 = lit      |
+| Mute button / LED     | RX / TX   | Note 24-31     | vel 127 = lit      |
+| Select button / LED   | RX / TX   | Note 32-39     | vel 127 = lit      |
 
 Fader values are 7-bit (0-127) in Ctrl mode, not 14-bit like Mackie's pitch-bend convention. This means motor positioning has 1 part in 128 resolution — perceptually smooth but less granular than a true MCU surface.
 
@@ -128,11 +134,11 @@ Despite what the CC range table suggests (and despite some documentation), the E
 
 This matters for echo suppression: the Extender ALSO echoes the bridge's own motor-fader writes back as FaderMove events. Without de-duplication, those echoes would loop back as mixer writes and create an infinite feedback. The bridge tracks `(midi_value, timestamp)` per strip on every motor write and silently drops any matching FaderMove arriving within 500 ms.
 
-### Encoder ring LEDs — UNSOLVED
+### Encoder ring LEDs — to be confirmed
 
-Sending CC 48 + value to the Extender (the Mackie V-Pot standard for ring control) does nothing. We probed CC 16, 32, 48, 64, 80, 96, 112 on both MIDI channels 0 and 1 with values 8, 41 (Mackie wrap), and 127. Nothing lit.
+Sending CC 48 + value to the Extender (the Mackie V-Pot standard for ring control) does nothing in Ctrl mode.
 
-The Extender lights its own rings locally during physical encoder turns, but external sync from software is unsolved as of this writing. If you crack it, please PR.
+Behringer's Ctrl-mode implementation puts the absolute encoders on CC 80-87 (0-127). The X-Touch One sheet of the same series lists the ring on the encoder's own CC, the same way the motor faders work. The bridge therefore drives ring N with CC 79+N and value 0-127. An earlier probe of base CCs (including 80) found nothing lit, so this still needs confirming on the venue Extender. If the ring write also moves the encoder's internal counter, absolute trim turns stay in step with the mixer. Any echo of a ring write that comes back as a turn is dropped, the same way motor-fader echoes are.
 
 ### Scribble strips — SysEx
 
@@ -161,7 +167,7 @@ The Extender does NOT respond to most CC writes immediately after power-on. Wait
 
 ## Open questions
 
-1. **Ring LED CC.** What's the right CC + encoding for external ring LED control on the X-Touch Extender in Ctrl mode?
+1. **Ring LED CC.** Confirm that CC 80-87 drives the rings on the Extender in Ctrl mode (see above).
 2. **Full X-Touch.** Does this bridge work end-to-end on the full Behringer X-Touch (not Extender)? Scribble strip format and mode behavior may differ.
 3. **Channel meters.** The mixer streams `/meters/0` etc. via `/batchsubscribe`. Worth surfacing on the Extender's LED meter columns? (Untested.)
 

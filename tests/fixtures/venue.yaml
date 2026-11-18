@@ -1,0 +1,143 @@
+# midibridge configuration
+
+xr18:
+  ip: auto               # test fixture: copy of the venue config.yaml
+  port: 10024            # XR18 OSC port (X-Air family uses 10024)
+  local_port: 10024      # Pi's local UDP port for receiving updates
+
+midi:
+  port_name: X-Touch-Ext
+
+# Fader mapping. Each Extender fader (1-8) drives one mixer target.
+# Targets: integer 1-16 (channel), "lr", "bus_N" (1-6), "dca_N" (1-4),
+# "trim_N" (1-16), "mute_N" (1-16), "mute_lr", or null (inert).
+faders:
+  1: 1
+  2: 2
+  3: 3
+  4: 4
+  5: 5
+  6: 6
+  7: 7                   # placeholder; change when you find a use
+  8: lr                  # main LR (house master, also drives buses via routing)
+
+# Knob mapping. Knobs are ONLY active with --setup.
+# Now mapped to per-channel input trim (preamp gain) for sound-check.
+knobs:
+  1: trim_1
+  2: trim_2
+  3: trim_3
+  4: trim_4
+  5: trim_5
+  6: trim_6
+  7: trim_7
+  8: null                # main LR has no preamp trim
+
+# Mute mapping. Mute buttons toggle channel mute, both modes.
+# LEDs reflect mixer state: lit = muted, dark = unmuted.
+# This works in both operation and setup modes since the Extender
+# is "tucked away" -- venue tech access is intentional.
+mutes:
+  1: mute_1
+  2: mute_2
+  3: mute_3
+  4: mute_4
+  5: mute_5
+  6: mute_6
+  7: mute_7
+  8: mute_lr             # mute the main LR (kills house audio)
+
+# Scribble strip labels and colors.
+#
+# Two forms accepted:
+#   N: ["TOP", "BOTTOM"]                                   # white bg, dark text
+#   N: {top: "TOP", bottom: "BOT", background: red,
+#       top_text: dark, bottom_text: dark}
+#
+# Colors: black, red, green, yellow, blue, magenta, cyan, white
+# Text shade: dark or light (light = "negative" / outlined text)
+# Avoid black background -- it's unreadable on this LCD.
+# Max 7 ASCII chars per row.
+scribble:
+  1: {top: "Headmic", bottom: "   1",    background: magenta}
+  2: {top: "Headmic", bottom: "   2",    background: magenta}
+  3: {top: "Handmic", bottom: "",        background: magenta}
+  4: {top: "- - - -", bottom: "",        background: yellow}
+  5: {top: " Music",  bottom: " Left",   background: white}
+  6: {top: " Music",  bottom: " Right",  background: white}
+  7: {top: "- - - -", bottom: "",        background: yellow}
+  8: {top: "MASTER",  bottom: "  LR",    background: green,  top_text: light, bottom_text: light}
+
+# HTTP debug server. Visit http://<pi-ip>:8080/debug
+debug_port: 8080
+
+# Mirror map: when a primary target is moved, secondary targets get
+# the same float value too. Use this if your routing setup is "channels
+# sent independently to Main AND to bus 1-6 (siblings, not in series)".
+# In that case, moving the Main fader should also drive the buses so
+# the room-fill speakers track the house master.
+#
+# If your routing is Main->bus (buses fed from Main via internal
+# routing), you don't need this -- the XR18 already does it.
+#
+# Format: each key is a target, value is a list of targets to mirror to.
+# Targets follow the same syntax as faders/knobs/mutes config.
+#
+# Example to mirror LR onto all 6 aux bus masters:
+# mirror:
+#   lr: [bus_1, bus_2, bus_3, bus_4, bus_5, bus_6]
+mirror:
+  lr: [bus_1, bus_2, bus_3, bus_4, bus_5, bus_6]
+
+# After sound check, flip this to true to lock trim knobs in
+# operation mode. Setup mode (bridge.py --setup) still works.
+# Lifecycle:
+#   1. Initial install: leave as false, dial in trim per channel
+#   2. Once trims are dialed in: change to true, restart service
+#   3. Future changes require SSH + manual --setup session
+lock_trim_in_operation_mode: false
+
+# FX mode. Hold knob 1 pushed in for hold_s seconds: the knobs become a
+# reverb editor for FX slot fx_slot, fed from channel `channel`. Hold
+# again to go back. Faders, mutes and the mirror map are not affected.
+#   knob 1      channel's send level into the FX slot
+#   knobs 2-8   reverb parameters, per type, from knob_maps below
+#   knob 8 push (short) steps through the reverb types
+# On entry the slot is set to default_type, unless it already holds a
+# reverb and keep_current_reverb is true. A non-reverb on the slot is
+# overwritten; its old type and parameters go to the /debug ring log.
+# The FX return (and the slot's FX send master) are switched on and
+# routed to LR; a level at -oo is raised to 0 dB, any other level kept.
+# Reverb types (index, code, name):
+#   0 HALL Hall Reverb    1 AMBI Ambience       2 RPLT Rich Plate
+#   3 ROOM Room Reverb    4 CHAM Chamber        5 PLAT Plate Reverb
+#   6 VREV Vintage Reverb 7 VRM  Vintage Room   8 GATE Gated Reverb
+#   9 RVRS Reverse Reverb
+# Parameter numbers per type: docs/FX-NOTES.md.
+fx_mode:
+  enabled: true
+  hold_s: 1.0
+  fx_slot: 1
+  channel: 1
+  default_type: "Vintage Reverb"   # name, code ("VREV") or index (6)
+  keep_current_reverb: true        # false = always switch to default_type
+  step_types_with_knob8: true      # remove/false if you don't want it
+  color: cyan              # scribble colour in FX mode; not used by the strips above
+  top_text: dark
+  bottom_text: dark
+  # Knobs 2..8 -> parameter numbers (/fx/1/par/NN). null = knob unused.
+  knob_maps:
+    "Hall Reverb":    [1, 2, 3, 4, 5, 7, 8]    # PreDly Decay Size Damping Diffuse LoCut HiCut
+    "Ambience":       [1, 2, 3, 4, 5, 7, 8]
+    "Rich Plate":     [1, 2, 3, 4, 5, 7, 8]
+    "Room Reverb":    [1, 2, 3, 4, 5, 7, 8]
+    "Chamber":        [1, 2, 3, 4, 5, 7, 8]
+    "Plate Reverb":   [1, 2, 3, 4, 5, 7, 8]
+    "Vintage Reverb": [1, 2, 3, 7, 8, 9, 10]   # PreDly Decay Mod LoCut HiCut LoMult HiMult
+    "Vintage Room":   [1, 2, 3, 4, 5, 9, 10]   # RevDly Decay Size Density ERLevel LoCut HiCut
+    "Gated Reverb":   [1, 2, 3, 4, 5, 7, 8]    # PreDly Decay Attack Density Spread LoCut HiCut
+    "Reverse Reverb": [1, 2, 3, 4, 5, 7, 8]    # PreDly Decay Rise Diffuse Spread LoCut HiCut
+
+logging:
+  level: INFO
+  ring_size: 500

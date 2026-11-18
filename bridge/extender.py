@@ -3,19 +3,14 @@
 CONTROL_MAP (output / feedback side)
 ====================================
   Motor fader     CC 70..77 on MIDI ch 1, value 0..127  -> strip 1..8
-  Encoder ring    CC 48..55 on MIDI ch 1, value encoded -> strip 1..8
+  Encoder ring    CC 80..87 on MIDI ch 1, value 0..127  -> strip 1..8
 
-Encoder ring value (Mackie Control standard):
-  Top nibble (bits 4..6): display mode
-    0 = single dot   (single segment lit at position)
-    1 = boost/cut    (segments from center outward)
-    2 = wrap         (segments from left)
-    3 = spread       (segments from center symmetrically)
-  Bottom nibble (bits 0..3): position 0..11 (segment 0 = off, 1..11 lit)
-  Bit 6 toggles the centre LED (used in some modes; we leave it 0).
-
-We use mode 0 ("single dot") so each ring shows a single lit segment
-corresponding to the current value. Position 0 = ring fully off.
+Ring: in Ctrl (absolute) mode the encoders send CC 80..87 with an
+absolute 0..127 value (Behringer "X-TOUCH / X-TOUCH EXTENDER MIDI Mode
+Implementation"). Like the motor faders, the same CC sent back to the
+Extender sets the ring (Behringer's X-TOUCH ONE sheet lists encoder and
+ring on one CC). The older Mackie CC 48..55 encoding does nothing in
+Ctrl mode. See docs/FX-NOTES.md; still to be confirmed on hardware.
 """
 
 from __future__ import annotations
@@ -29,7 +24,7 @@ from . import logger
 
 
 _CC_FADER_BASE = 70
-_CC_RING_BASE  = 48
+_CC_RING_BASE  = 80
 
 
 # ----- Port discovery & open -------------------------------------------
@@ -86,21 +81,6 @@ def open_output(name_fragment: str) -> mido.ports.BaseOutput:
 
 # ----- Motor fader + ring output ---------------------------------------
 
-def _position_to_ring_value(midi_value: int) -> int:
-    """Map 0..127 to MCU single-dot ring encoding.
-
-    Mode 0 (single dot), position 0..11 in low nibble. Position 0
-    means ring off; positions 1..11 map to the 11 lit segments.
-    """
-    if midi_value <= 0:
-        return 0  # ring off
-    # 1..127 -> 1..11
-    pos = 1 + int(midi_value * 10 / 127)
-    if pos > 11:
-        pos = 11
-    return pos  # mode bits = 0
-
-
 class MotorOutput:
     """Thread-safe writer for motor-fader CCs, LED-ring CCs, and SysEx."""
 
@@ -130,9 +110,8 @@ class MotorOutput:
             return
         midi_value = max(0, min(127, midi_value))
         cc = _CC_RING_BASE + (knob - 1)
-        value = _position_to_ring_value(midi_value)
         msg = mido.Message(
-            "control_change", channel=0, control=cc, value=value
+            "control_change", channel=0, control=cc, value=midi_value
         )
         with self._lock:
             try:

@@ -131,6 +131,10 @@ def discover_mixer(port: int = 10024,
 
 # Callback signature for any target's incoming position update.
 TargetUpdateCallback = Callable[[Target, float], None]
+# Raw listener: (address, args) for every mixer message that has args.
+# Used by FX mode, whose values (FX type ints, enum params) must not be
+# squeezed through the 0..1 target path.
+RawListener = Callable[[str, tuple], None]
 
 
 # Internal logic only dispatches on these address families. Anything
@@ -170,11 +174,15 @@ class XR18Link:
         self._cleanup_thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._cb: Optional[TargetUpdateCallback] = None
+        self._listeners: list[RawListener] = []
 
     # ----- Public API ----------------------------------------------------
 
     def set_target_callback(self, cb: TargetUpdateCallback) -> None:
         self._cb = cb
+
+    def add_listener(self, fn: RawListener) -> None:
+        self._listeners.append(fn)
 
     def start(self) -> None:
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -262,6 +270,16 @@ class XR18Link:
             address = target_to_address(target)
         except ValueError:
             return
+        self._build_and_send(address, fanout=False)
+
+    def send_address(self, address: str, value) -> None:
+        """Write one value (int or float, sent as-is) to an arbitrary
+        address. Goes to the mixer and is fanned out to all clients."""
+        self._build_and_send(address, value, fanout=True)
+
+    def query_address(self, address: str) -> None:
+        """Ask the mixer for the value at `address` (reply arrives via
+        the read loop and reaches the raw listeners)."""
         self._build_and_send(address, fanout=False)
 
     # ----- Read loop -----------------------------------------------------
@@ -354,6 +372,12 @@ class XR18Link:
             args = msg.message.params
             if not args:
                 continue
+            for fn in self._listeners:
+                try:
+                    fn(address, tuple(args))
+                except Exception as e:
+                    logger.error("osc-in", "listener raised",
+                                 address=address, err=str(e))
             if not any(address.startswith(p) for p in _DISPATCH_PATTERNS):
                 continue
             target = address_to_target(address)

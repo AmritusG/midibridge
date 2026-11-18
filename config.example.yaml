@@ -109,6 +109,47 @@ mirror: {}
 #   3. Future changes require ssh + manual --setup session
 lock_trim_in_operation_mode: false
 
+# FX mode. Hold knob 1 pushed in for hold_s seconds: the knobs become a
+# reverb editor for FX slot fx_slot, fed from channel `channel`. Hold
+# again to go back. Faders, mutes and the mirror map are not affected.
+#   knob 1      channel's send level into the FX slot
+#   knobs 2-8   reverb parameters, per type, from knob_maps below
+#   knob 8 push (short) steps through the reverb types
+# On entry the slot is set to default_type, unless it already holds a
+# reverb and keep_current_reverb is true. A non-reverb on the slot is
+# overwritten; its old type and parameters go to the /debug ring log.
+# The FX return (and the slot's FX send master) are switched on and
+# routed to LR; a level at -oo is raised to 0 dB, any other level kept.
+# Reverb types (index, code, name):
+#   0 HALL Hall Reverb    1 AMBI Ambience       2 RPLT Rich Plate
+#   3 ROOM Room Reverb    4 CHAM Chamber        5 PLAT Plate Reverb
+#   6 VREV Vintage Reverb 7 VRM  Vintage Room   8 GATE Gated Reverb
+#   9 RVRS Reverse Reverb
+# Parameter numbers per type: docs/FX-NOTES.md.
+fx_mode:
+  enabled: true
+  hold_s: 1.0
+  fx_slot: 1
+  channel: 1
+  default_type: "Vintage Reverb"   # name, code ("VREV") or index (6)
+  keep_current_reverb: true        # false = always switch to default_type
+  step_types_with_knob8: true      # remove/false if you don't want it
+  color: green             # scribble colour in FX mode; not used by the strips above
+  top_text: dark
+  bottom_text: dark
+  # Knobs 2..8 -> parameter numbers (/fx/1/par/NN). null = knob unused.
+  knob_maps:
+    "Hall Reverb":    [1, 2, 3, 4, 5, 7, 8]    # PreDly Decay Size Damping Diffuse LoCut HiCut
+    "Ambience":       [1, 2, 3, 4, 5, 7, 8]
+    "Rich Plate":     [1, 2, 3, 4, 5, 7, 8]
+    "Room Reverb":    [1, 2, 3, 4, 5, 7, 8]
+    "Chamber":        [1, 2, 3, 4, 5, 7, 8]
+    "Plate Reverb":   [1, 2, 3, 4, 5, 7, 8]
+    "Vintage Reverb": [1, 2, 3, 7, 8, 9, 10]   # PreDly Decay Mod LoCut HiCut LoMult HiMult
+    "Vintage Room":   [1, 2, 3, 4, 5, 9, 10]   # RevDly Decay Size Density ERLevel LoCut HiCut
+    "Gated Reverb":   [1, 2, 3, 4, 5, 7, 8]    # PreDly Decay Attack Density Spread LoCut HiCut
+    "Reverse Reverb": [1, 2, 3, 4, 5, 7, 8]    # PreDly Decay Rise Diffuse Spread LoCut HiCut
+
 logging:
   level: INFO            # DEBUG | INFO | WARNING | ERROR
   ring_size: 500

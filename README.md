@@ -24,6 +24,7 @@ Drag a fader on any surface — every other surface mirrors instantly.
 - **Mute buttons** with bidirectional LED feedback
 - **Per-channel preamp gain (trim)** on knobs (toggleable lock for live use)
 - **Colored scribble strips** — Behringer's proprietary SysEx protocol, fully documented in [PROTOCOL.md](PROTOCOL.md)
+- **FX mode** — hold knob 1 for a second and the knobs become a reverb editor: knob 1 sets channel 1's send into FX 1, knobs 2-8 set the reverb's parameters, and the scribble strips show names and live values. See [FX mode](#fx-mode-reverb-on-the-knobs)
 - **Bus mode** — press Select 1-6 to enter "sends on fader" mode for each aux bus, perfect for dialing in room-fill or monitor mixes during sound check
 - **Master mirror** — make one fader drive multiple targets (e.g. Main LR + 6 aux bus masters in lockstep)
 - **Transparent OSC proxy** — multiple software clients (X-Air Edit, Mixing Station, custom OSC apps) point at the Pi and stay in live sync with each other and with the hardware surface. Auto-discovery, no per-client config
@@ -125,6 +126,7 @@ See `config.example.yaml` for the full annotated config. Key sections:
 - **`mutes`** — strip 1-8 → channel mute or `mute_lr`
 - **`scribble`** — strip labels, background colors, text shade
 - **`mirror`** — fan out one fader's value to multiple targets (e.g. Main → all 6 aux buses)
+- **`fx_mode`** — FX mode on/off, hold time, FX slot, channel, default reverb, per-reverb knob maps, scribble colour
 - **`lock_trim_in_operation_mode`** — set `true` to require `--setup` for trim adjustments
 
 ### Plug-and-play deployment
@@ -136,6 +138,22 @@ With `xr18.ip: auto`, the bridge does broadcast discovery at startup and uses th
 Run the bridge with `--setup` (or use the included `unlock-trim.sh` wrapper). Press **Select 1** on the Extender. Scribble strips turn yellow, faders snap to channel-1-7's send levels into bus 1, and fader 8 controls bus 1's master. Press Select 1 again to return to Live mode. Press Select 3 to jump directly to bus 3 sends. The active bus's Select LED lights up.
 
 This is how you dial in a room-fill or monitor mix per speaker without needing X-Air Edit on a laptop.
+
+## FX mode (reverb on the knobs)
+
+Hold **knob 1** pushed in for about a second (`fx_mode.hold_s`). The scribble strips change to the FX colour and the knobs take over FX slot 1:
+
+| Knob | In FX mode |
+|---|---|
+| 1 | channel 1's send level into FX 1 (strip shows the reverb type and the send in dB) |
+| 2-8 | seven parameters of the reverb on FX 1, per type, from `fx_mode.knob_maps` (e.g. Vintage Reverb: PreDly, Decay, Mod, LoCut, HiCut, LoMult, HiMult) |
+| 8, short push | step to the next reverb type (Hall → Ambience → … → Reverse → Hall). Knob labels follow. Set `step_types_with_knob8: false` to drop this |
+
+On entry, FX 1 is set to `default_type` (Vintage Reverb), unless it already holds a reverb and `keep_current_reverb` is true. Any other kind of effect on FX 1 is overwritten, and its old type and parameters are written to the `/debug` ring log. The FX 1 return and FX 1 send master are switched on and the return is assigned to LR. A level at −∞ is raised to 0 dB, and any other level is left alone.
+
+Hold knob 1 again to leave. The reverb and the send stay exactly as set, and the knobs, rings and scribble strips go back to what they were (trim, Live or Bus labels). Faders, mutes, the mirror map and bus mode work the same inside and outside FX mode. FX mode works in both operation and setup modes. While it is on, it takes the knobs over from trim.
+
+Changes made in X-Air Edit while FX mode is on (parameters, send, even the FX type) show up on the rings and strips. Knob turns in FX mode are relative, so a knob never jumps a value. The facts behind all of this, with sources, are in [docs/FX-NOTES.md](docs/FX-NOTES.md).
 
 ## Operation vs Setup modes
 
@@ -156,7 +174,7 @@ A few hard-won discoveries are documented in [PROTOCOL.md](PROTOCOL.md):
 
 ## Known limitations
 
-- **LED rings around encoders don't accept external control.** The CC 48-55 standard Mackie range is ignored; we probed CC ranges 16-127 on both MIDI channels 0 and 1 in Ctrl mode without finding the right one. The Extender lights its own rings locally during physical encoder turns, but external sync (e.g. when X-Air Edit changes a value) doesn't work. If you find the right protocol, please open an issue or PR.
+- **LED rings: not yet confirmed on hardware.** The Mackie CC 48-55 range is ignored in Ctrl mode. The bridge now drives the rings on the encoders' own CCs (80-87, absolute 0-127), following Behringer's Ctrl-mode MIDI implementation (see [docs/FX-NOTES.md](docs/FX-NOTES.md)). If your Extender doesn't light the rings from software, everything else still works. The Extender lights its own rings during physical turns.
 - The Behringer X-Touch (full version, not Extender) likely needs different SysEx for scribble strips and may need different CC ranges for some controls. Untested.
 - The bridge has no UI beyond the debug HTTP page. Reconfiguration requires editing YAML and restarting.
 
@@ -166,6 +184,7 @@ A few hard-won discoveries are documented in [PROTOCOL.md](PROTOCOL.md):
 bridge.py              — main entry, event loop, mode state machine
 bridge/
   config.py            — YAML loader
+  fx.py                — FX mode: reverb tables, knob maps, state machine
   targets.py           — target type system (channel/bus/dca/trim/mute/send)
   decoder.py           — MIDI → event objects
   extender.py          — MIDI port management, motor/LED/scribble output
@@ -174,7 +193,11 @@ bridge/
   logger.py            — structured logger with ring buffer
   debug_http.py        — debug page server
   watchdog.py          — USB MIDI presence monitor
+tests/                 — pytest suite (fake Extender, fake XR18 link, fake
+                         XR18 over UDP)
 ```
+
+Run the tests with `pip install -r requirements-dev.txt && python -m pytest tests`.
 
 The OSC layer (`bridge/xr18.py`) does three things in a single read loop:
 
@@ -212,7 +235,7 @@ MIT — see [LICENSE](LICENSE).
 ## Contributing
 
 Issues and PRs welcome. Particularly interested in:
-- Encoder ring CC discovery (see Known Limitations)
+- Encoder ring confirmation on more Extender firmware (see Known Limitations)
 - Confirmation/fixes for the full Behringer X-Touch (not Extender)
 - Other X-Air mixer variants (X18, XR-USB, etc.)
 - Other MCU-compatible controllers

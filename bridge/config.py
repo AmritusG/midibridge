@@ -8,6 +8,7 @@ from typing import Optional
 
 import yaml
 
+from . import fx
 from .targets import Target, parse_target
 
 
@@ -68,6 +69,7 @@ class Config:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     scribble: ScribbleConfig = field(default_factory=ScribbleConfig)
     debug_port: int = 8080
+    fx_mode: fx.FxModeConfig = field(default_factory=fx.FxModeConfig)
 
     def active_fader_count(self) -> int:
         return sum(1 for v in self.fader_map.values() if v is not None)
@@ -192,6 +194,7 @@ def load(path: str | Path) -> Config:
 
     debug_port = int(raw.get("debug_port", 8080))
     lock_trim = bool(raw.get("lock_trim_in_operation_mode", False))
+    fx_mode = fx.load_config(raw.get("fx_mode"))
 
     return Config(
         xr18=xr18, midi=midi,
@@ -201,4 +204,5 @@ def load(path: str | Path) -> Config:
         logging=logging_cfg,
         scribble=scribble,
         debug_port=debug_port,
+        fx_mode=fx_mode,
     )
