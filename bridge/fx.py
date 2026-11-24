@@ -19,12 +19,14 @@ from __future__ import annotations
 
 import math
 import re
-import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from . import logger
+from .knob_editor import (  # noqa: F401  (re-exported for tests)
+    KnobEditor, MAX_DELTA, SCRIBBLE_MIN_INTERVAL_S, threading_scheduler,
+)
 
 
 # ----- Parameter definitions -------------------------------------------
@@ -310,46 +312,33 @@ def load_config(raw) -> FxModeConfig:
 
 # ----- Controller ------------------------------------------------------
 
-# Encoder deltas bigger than this are treated as a counter resync (e.g.
-# the Extender's counter was moved by something else), not a user turn.
-_MAX_DELTA = 16
+_MAX_DELTA = MAX_DELTA
 # An echo of our own ring write comes back within this many raw steps.
 _RING_SNAP = 4
-# Minimum spacing of scribble SysEx writes per strip while values stream.
-SCRIBBLE_MIN_INTERVAL_S = 0.05
 # Encoder ticks per enum step.
 _ENUM_TICKS = 6
 # Wait for a non-reverb's parameters before overwriting (so they're logged).
 TYPE_CHECK_DELAY_S = 0.3
 # 0 dB on the X-Air fader law.
 _ZERO_DB = 0.75
+_threading_scheduler = threading_scheduler
 
 
-def _threading_scheduler(delay: float, fn: Callable[[], None]):
-    t = threading.Timer(delay, fn)
-    t.daemon = True
-    t.start()
-    return t
+class FxMode(KnobEditor):
+    """State machine for FX mode (knob 1 held)."""
 
-
-class FxMode:
-    """State machine for FX mode. Thread-safe: called from the MIDI
-    thread (knobs), the OSC thread (mixer echoes) and timer threads."""
+    kind = "fx"
 
     def __init__(self, cfg: FxModeConfig, link,
                  ring_writer: Callable[[int, int], None],
                  scribble_writer: Callable[..., None],
                  restore: Callable[[], None],
-                 scheduler: Callable = _threading_scheduler,
-                 clock: Callable[[], float] = time.monotonic):
+                 scheduler: Callable = threading_scheduler,
+                 clock: Callable[[], float] = time.monotonic,
+                 before_enter: Optional[Callable[[], None]] = None):
+        super().__init__(link, ring_writer, scribble_writer, restore,
+                         scheduler, clock, before_enter)
         self.cfg = cfg
-        self.link = link
-        self._ring_writer = ring_writer
-        self._scribble_writer = scribble_writer
-        self._restore = restore
-        self._schedule = scheduler
-        self._clock = clock
-        self._lock = threading.RLock()
 
         s, ch = cfg.fx_slot, cfg.channel
         self.addr_type = f"/fx/{s}/type"
@@ -366,7 +355,6 @@ class FxMode:
                              self.addr_rtn_fader, self.addr_fxsend_on,
                              self.addr_fxsend_fader)
 
-        self.active = False
         self.fx_type: Optional[int] = None
         self.params: dict[int, float] = {}    # par num -> raw mixer value
         self.send: Optional[float] = None
@@ -374,12 +362,14 @@ class FxMode:
         self.insert: Optional[int] = None
         self._pending_type_check = False
         self._pending_route: set = set()
-        self._last_raw: dict[int, Optional[int]] = {}
         self._enum_acc: dict[int, float] = {}
-        self._hold_handle = None
-        self._shown: dict[int, tuple] = {}
-        self._scribble_sent_at: dict[int, float] = {}
-        self._scribble_timer: dict[int, object] = {}
+
+    @property
+    def hold_s(self) -> float:
+        return self.cfg.hold_s
+
+    def _colours(self, strip: int) -> tuple:
+        return (self.cfg.color, self.cfg.top_text, self.cfg.bottom_text)
 
     # ----- wiring -------------------------------------------------------
 
@@ -404,12 +394,7 @@ class FxMode:
             return False
         with self._lock:
             if strip == 1:
-                if pressed:
-                    self._cancel_hold()
-                    self._hold_handle = self._schedule(
-                        self.cfg.hold_s, self._hold_fired)
-                else:
-                    self._cancel_hold()
+                self._hold_push(pressed)
                 return True
             if (strip == 8 and self.active and pressed
                     and self.cfg.step_types_with_knob8):
@@ -419,72 +404,36 @@ class FxMode:
                 return True   # knob 8 release in FX mode
         return False
 
-    def _cancel_hold(self) -> None:
-        if self._hold_handle is not None:
-            try:
-                self._hold_handle.cancel()
-            except Exception:
-                pass
-            self._hold_handle = None
-
-    def _hold_fired(self) -> None:
-        with self._lock:
-            self._hold_handle = None
-            was_active = self.active
-        if was_active:
-            self.exit()
-        else:
-            self.enter()
-
     # ----- enter / exit -------------------------------------------------
 
-    def enter(self) -> None:
-        with self._lock:
-            if self.active:
-                return
-            self.active = True
-            self._last_raw = {}
-            self._enum_acc = {}
-            self._shown = {}
-            logger.info("fx", "FX mode on", slot=self.cfg.fx_slot,
-                        channel=self.cfg.channel,
-                        cached_type=type_label(self.fx_type))
-            if self.insert == 1:
-                logger.warn("fx", "FX slot is set to insert; a send-reverb "
-                            "will not be heard until it is a send effect",
-                            slot=self.cfg.fx_slot)
-            self._pending_type_check = True
-            if self.fx_type is not None:
-                self._check_type()
+    def _on_enter(self) -> None:
+        self._enum_acc = {}
+        logger.info("fx", "FX mode on", slot=self.cfg.fx_slot,
+                    channel=self.cfg.channel,
+                    cached_type=type_label(self.fx_type))
+        if self.insert == 1:
+            logger.warn("fx", "FX slot is set to insert; a send-reverb "
+                        "will not be heard until it is a send effect",
+                        slot=self.cfg.fx_slot)
+        self._pending_type_check = True
+        if self.fx_type is not None:
+            self._check_type()
+        else:
+            self.link.query_address(self.addr_type)
+            self._query_params(64)
+        self._pending_route = set(self._route_addrs)
+        for a in self._route_addrs:
+            if a in self.route:
+                self._check_route(a)
             else:
-                self.link.query_address(self.addr_type)
-                self._query_params(64)
-            self._pending_route = set(self._route_addrs)
-            for a in self._route_addrs:
-                if a in self.route:
-                    self._check_route(a)
-                else:
-                    self.link.query_address(a)
-            if self.send is None:
-                self.link.query_address(self.addr_send)
-            self._paint_all(force=True)
+                self.link.query_address(a)
+        if self.send is None:
+            self.link.query_address(self.addr_send)
 
-    def exit(self) -> None:
-        with self._lock:
-            if not self.active:
-                return
-            self.active = False
-            self._pending_type_check = False
-            self._pending_route = set()
-            for t in self._scribble_timer.values():
-                try:
-                    t.cancel()
-                except Exception:
-                    pass
-            self._scribble_timer = {}
-            self._shown = {}
-            logger.info("fx", "FX mode off", type=type_label(self.fx_type))
-        self._restore()
+    def _on_exit(self) -> None:
+        self._pending_type_check = False
+        self._pending_route = set()
+        logger.info("fx", "FX mode off", type=type_label(self.fx_type))
 
     def _check_type(self) -> None:
         if not self._pending_type_check or self.fx_type is None:
@@ -620,14 +569,6 @@ class FxMode:
             out[knob] = t.params.get(num) if num is not None else None
         return out
 
-    def _delta(self, knob: int, raw: int) -> int:
-        last = self._last_raw.get(knob)
-        self._last_raw[knob] = raw
-        if last is None:
-            return 0
-        d = raw - last
-        return 0 if abs(d) > _MAX_DELTA else d
-
     def on_knob_turn(self, strip: int, raw: int) -> bool:
         """Returns True if FX mode consumed the event."""
         if not self.active:
@@ -689,52 +630,3 @@ class FxMode:
         else:
             ring = int(round(min(1.0, max(0.0, float(raw))) * 127))
         return p.label, p.format(raw), ring
-
-    def _paint_all(self, force: bool = False) -> None:
-        for s in range(1, 9):
-            self._paint_strip(s, force=force)
-
-    def _paint_strip(self, strip: int, ring: bool = True,
-                     force: bool = False) -> None:
-        top, bottom, ring_val = self._strip_view(strip)
-        if ring and ring_val is not None:
-            self._ring_writer(strip, ring_val)
-            # The Extender's encoder counter now sits at ring_val (if the
-            # ring write moves it); continue relative turns from there.
-            self._last_raw[strip] = ring_val
-        view = (top, bottom)
-        if not force and self._shown.get(strip) == view:
-            return
-        self._shown[strip] = view
-        now = self._clock()
-        last = self._scribble_sent_at.get(strip, -1e9)
-        if force or now - last >= SCRIBBLE_MIN_INTERVAL_S:
-            self._send_scribble(strip)
-        elif strip not in self._scribble_timer:
-            wait = SCRIBBLE_MIN_INTERVAL_S - (now - last)
-            self._scribble_timer[strip] = self._schedule(
-                wait, lambda s=strip: self._flush_scribble(s))
-
-    def _flush_scribble(self, strip: int) -> None:
-        with self._lock:
-            self._scribble_timer.pop(strip, None)
-            if self.active:
-                self._send_scribble(strip)
-
-    def _send_scribble(self, strip: int) -> None:
-        top, bottom = self._shown.get(strip, ("", ""))
-        self._scribble_sent_at[strip] = self._clock()
-        self._scribble_writer(strip, top, bottom, self.cfg.color,
-                              self.cfg.top_text, self.cfg.bottom_text)
-
-    def repaint(self) -> None:
-        """Full repaint (e.g. after a MIDI reconnect)."""
-        with self._lock:
-            if self.active:
-                self._shown = {}
-                self._paint_all(force=True)
-
-    # ----- outbound -----------------------------------------------------
-
-    def _write(self, address: str, value) -> None:
-        self.link.send_address(address, value)

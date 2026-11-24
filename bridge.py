@@ -7,6 +7,7 @@ Final appliance:
   - Knob -> trim (setup mode, or operation mode unless locked)
   - LED ring feedback on encoders for any target the knob is mapped to
   - FX mode: hold knob 1 ~1 s -> knobs edit a reverb on FX 1
+  - EQ mode: hold knob 2 ~1 s -> knobs edit channel 1's EQ and low cut
   - Scribble strip labels (top + bottom row per strip) set on startup
   - HTTP /debug endpoint with ring buffer
   - Reconnect logic for MIDI and OSC paths
@@ -25,6 +26,7 @@ from typing import Optional
 from bridge import config as cfg_mod
 from bridge import extender, logger
 from bridge.debug_http import DebugServer
+from bridge.eq import EqMode
 from bridge.fx import FxMode
 from bridge.watchdog import UsbWatchdog
 from bridge.decoder import (
@@ -202,12 +204,18 @@ def _paint_mode_scribbles(state: SyncState, motor, scribble_cfg) -> None:
                         *_scribble_for_strip(state, scribble_cfg, strip))
 
 
+def _editing(*modes) -> bool:
+    """True while an editor mode (FX or EQ) owns the knobs and strips."""
+    return any(m is not None and m.active for m in modes)
+
+
 def _refresh_extender_for_mode(state: SyncState, motor, scribble_cfg, link,
-                               fx: Optional[FxMode] = None):
+                               fx: Optional[FxMode] = None,
+                               eq: Optional[EqMode] = None):
     """Repaint scribble strips, snap motors, light Select LEDs to reflect
-    current bus_mode (Live or Bus N). While FX mode is on it owns the
-    scribble strips, so they are left alone."""
-    if not (fx and fx.active):
+    current bus_mode (Live or Bus N). While FX or EQ mode is on it owns
+    the scribble strips, so they are left alone."""
+    if not _editing(fx, eq):
         _paint_mode_scribbles(state, motor, scribble_cfg)
 
     # Select LEDs: light the active bus's Select button, dark the rest.
@@ -231,21 +239,22 @@ def _refresh_extender_for_mode(state: SyncState, motor, scribble_cfg, link,
         _send_motor_fader(state, motor, strip, midi)
 
 
-def _enter_bus_mode(state, bus: int, motor, scribble_cfg, link, fx=None):
+def _enter_bus_mode(state, bus: int, motor, scribble_cfg, link, fx=None,
+                    eq=None):
     state.bus_mode = bus
     logger.info("mode", "entering bus mode", bus=bus)
-    _refresh_extender_for_mode(state, motor, scribble_cfg, link, fx)
+    _refresh_extender_for_mode(state, motor, scribble_cfg, link, fx, eq)
 
 
-def _exit_bus_mode(state, motor, scribble_cfg, link, fx=None):
+def _exit_bus_mode(state, motor, scribble_cfg, link, fx=None, eq=None):
     prev = state.bus_mode
     state.bus_mode = None
     logger.info("mode", "exiting bus mode", was_bus=prev)
-    _refresh_extender_for_mode(state, motor, scribble_cfg, link, fx)
+    _refresh_extender_for_mode(state, motor, scribble_cfg, link, fx, eq)
 
 
 def restore_after_fx(state: SyncState, motor, scribble_cfg, link) -> None:
-    """FX mode just ended: put back the scribble strips and rings of the
+    """FX or EQ mode just ended: put back the scribble strips and rings of the
     current mode (Live or Bus N). Knob rings go back to their mapped
     targets' mixer values, which also re-seats the encoders' counters."""
     _paint_mode_scribbles(state, motor, scribble_cfg)
@@ -262,6 +271,14 @@ def restore_after_fx(state: SyncState, motor, scribble_cfg, link) -> None:
             _send_ring(state, motor, knob, fader_position_to_midi(pos))
 
 
+def link_modes(fx: Optional[FxMode], eq: Optional[EqMode]) -> None:
+    """Make FX mode and EQ mode exclusive: entering one leaves the other
+    cleanly (its timers stop; the new mode repaints every strip)."""
+    if fx is not None and eq is not None:
+        fx.before_enter = lambda: eq.exit(restore=False)
+        eq.before_enter = lambda: fx.exit(restore=False)
+
+
 def handle_midi_event(
     ev,
     state: SyncState,
@@ -270,6 +287,7 @@ def handle_midi_event(
     motor: extender.MotorOutput,
     scribble_cfg=None,
     fx: Optional[FxMode] = None,
+    eq: Optional[EqMode] = None,
 ) -> None:
     """Handle one decoded event from the Extender."""
     if isinstance(ev, FaderMove):
@@ -361,6 +379,8 @@ def handle_midi_event(
                 return
         if fx is not None and fx.on_knob_turn(ev.strip, ev.value):
             return
+        if eq is not None and eq.on_knob_turn(ev.strip, ev.value):
+            return
         target = state.knob_map.get(ev.strip)
         if target is None:
             logger.debug("knob", "turn (unmapped)",
@@ -387,9 +407,13 @@ def handle_midi_event(
 
     elif isinstance(ev, KnobPush):
         # FX mode owns knob 1's push (hold ~1 s = FX mode on/off) and,
-        # while on, knob 8's push (step reverb type). Every other push is
-        # a no-op, as before.
+        # while on, knob 8's push (step reverb type). EQ mode owns knob
+        # 2's push (hold = EQ mode on/off) and, while on, its configured
+        # pushes (knob 8 = EQ on/off, knob 5 = reset band). Every other
+        # push is a no-op, as before.
         if fx is not None and fx.on_knob_push(ev.strip, ev.pressed):
+            return
+        if eq is not None and eq.on_knob_push(ev.strip, ev.pressed):
             return
         target = state.knob_map.get(ev.strip)
         logger.debug("knob", "push (no-op)",
@@ -403,10 +427,10 @@ def handle_midi_event(
                              strip=ev.strip)
             elif 1 <= ev.strip <= 6:
                 if state.bus_mode == ev.strip:
-                    _exit_bus_mode(state, motor, scribble_cfg, link, fx)
+                    _exit_bus_mode(state, motor, scribble_cfg, link, fx, eq)
                 else:
                     _enter_bus_mode(state, ev.strip, motor, scribble_cfg,
-                                    link, fx)
+                                    link, fx, eq)
             else:
                 logger.debug("button", "select ignored (not 1..6)",
                              strip=ev.strip)
@@ -444,7 +468,8 @@ def handle_midi_event(
 
 
 def make_xr18_callback(state: SyncState, motor: extender.MotorOutput,
-                       fx: Optional[FxMode] = None):
+                       fx: Optional[FxMode] = None,
+                       eq: Optional[EqMode] = None):
     """Callback fired on any incoming target update from the mixer."""
     def on_target(target: Target, position: float) -> None:
         with state.lock:
@@ -499,8 +524,8 @@ def make_xr18_callback(state: SyncState, motor: extender.MotorOutput,
                          strip=fader_strip, target=target_label(target),
                          touched=touched, recent_move=recent_move)
 
-        # While FX mode is on, the rings belong to it.
-        if knob_strip is not None and not (fx and fx.active):
+        # While FX or EQ mode is on, the rings belong to it.
+        if knob_strip is not None and not _editing(fx, eq):
             _send_ring(state, motor, knob_strip, midi)
             logger.info("sync", "ring <- XR18",
                         knob=knob_strip, target=target_label(target),
@@ -676,7 +701,23 @@ def main() -> int:
                     channel=cfg.fx_mode.channel,
                     default_type=cfg.fx_mode.default_type)
 
-    link.set_target_callback(make_xr18_callback(state, motor, fx))
+    # EQ mode, same wiring. The two modes are exclusive: entering one
+    # leaves the other first (without repainting the normal surface).
+    eq: Optional[EqMode] = None
+    if cfg.eq_mode.enabled:
+        eq = EqMode(
+            cfg.eq_mode, link,
+            ring_writer=lambda knob, midi: _send_ring(state, motor, knob, midi),
+            scribble_writer=lambda *a: _write_scribble(motor, *a),
+            restore=lambda: restore_after_fx(state, motor, cfg.scribble, link),
+        )
+        link.add_listener(eq.on_osc)
+        logger.info("system", "eq mode available",
+                    hold_knob=cfg.eq_mode.hold_knob, hold_s=cfg.eq_mode.hold_s,
+                    channel=cfg.eq_mode.channel)
+    link_modes(fx, eq)
+
+    link.set_target_callback(make_xr18_callback(state, motor, fx, eq))
     try:
         link.start()
     except Exception as e:
@@ -711,6 +752,8 @@ def main() -> int:
 
     if fx is not None:
         fx.startup_queries()
+    if eq is not None:
+        eq.startup_queries()
 
     logger.info("system", "listening. Ctrl+C to stop.")
 
@@ -722,7 +765,8 @@ def main() -> int:
                     ev = decode(msg)
                     if ev is not None:
                         handle_midi_event(ev, state, args.setup, link, motor,
-                                          scribble_cfg=cfg.scribble, fx=fx)
+                                          scribble_cfg=cfg.scribble, fx=fx,
+                                          eq=eq)
             except (OSError, IOError) as e:
                 logger.error("midi", "input loop crashed; reconnecting",
                              err=str(e))
@@ -742,8 +786,8 @@ def main() -> int:
                     motor = extender.MotorOutput(new_out)
                     # Rewire callback to the new motor object
                     link.set_target_callback(
-                        make_xr18_callback(state, motor, fx))
-                    fx_on = fx is not None and fx.active
+                        make_xr18_callback(state, motor, fx, eq))
+                    fx_on = _editing(fx, eq)
                     if not fx_on:
                         apply_scribble(cfg, motor)
                     # Resync state from cached XR18 positions
@@ -761,7 +805,9 @@ def main() -> int:
                         if mute is not None:
                             motor.send_button_led("mute", mute, pos < 0.5)
                     if fx_on:
-                        fx.repaint()
+                        for m in (fx, eq):
+                            if m is not None:
+                                m.repaint()
                     logger.info("system", "midi reconnected")
                 except RuntimeError as e2:
                     logger.error("midi", "reconnect failed", err=str(e2))

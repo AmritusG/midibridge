@@ -150,6 +150,51 @@ fx_mode:
     "Gated Reverb":   [1, 2, 3, 4, 5, 7, 8]    # PreDly Decay Attack Density Spread LoCut HiCut
     "Reverse Reverb": [1, 2, 3, 4, 5, 7, 8]    # PreDly Decay Rise Diffuse Spread LoCut HiCut
 
+# EQ mode. Hold knob hold_knob (2) pushed in for hold_s seconds: the
+# knobs become a low/mid/high EQ editor for channel `channel` (1 =
+# Headmic 1). Hold again to go back; the EQ stays as you set it.
+# Holding knob 1 still goes to FX mode; the two modes are exclusive.
+# Faders, mutes, the mirror map, bus mode and trim are not affected.
+# Only the channel's EQ (/ch/01/eq/...) and low cut (/ch/01/preamp/hp...)
+# are ever written.
+#   knobs       what each knob turn sets (names below); null = unused
+#   push_eq_onoff    short push: channel EQ on/off (bypass compare)
+#   push_reset_band  short push: band of the last-turned knob to 0 dB
+# Knob names: low_g low_f low_q mid_g mid_f mid_q high_g high_f high_q
+# lowcut_f. Bands: the XR18 channel EQ has 4. low/mid/high_band pick
+# which; the fourth is left alone. With shelves_on_entry, entering EQ
+# mode makes the low band a low shelf and the high band a high shelf
+# (a mid band that is a cut becomes a PEQ), because a cut filter has no
+# gain. The old type goes to the /debug ring log. Facts and sources:
+# docs/FX-NOTES.md, "Channel EQ".
+eq_mode:
+  enabled: true
+  hold_knob: 2
+  hold_s: 1.0
+  channel: 1
+  low_band: 1
+  mid_band: 3
+  high_band: 4
+  shelves_on_entry: true
+  color: white             # scribble colour in EQ mode; not the FX colour, not used above
+  top_text: dark
+  bottom_text: dark
+  knobs:
+    1: low_g               # LO G   low shelf gain
+    2: low_f               # LO F   low shelf frequency
+    3: mid_g               # MID G  mid gain
+    4: mid_f               # MID F  mid frequency
+    5: mid_q               # MID Q  mid Q (right = narrower)
+    6: high_g              # HI G   high shelf gain
+    7: high_f              # HI F   high shelf frequency
+    8: lowcut_f            # LCUT   low cut frequency (turning it switches the low cut on)
+  push_eq_onoff: 8         # null = no push
+  push_reset_band: 5       # null = no push
+  gain_step_db: 0.5        # per encoder tick
+  freq_step_octaves: 0.1   # per tick (snapped to the mixer's grid: ~0.1 oct)
+  q_steps: 1               # mixer Q steps per tick (~5% each)
+  lowcut_step_octaves: 0.1
+  lowcut_max_hz: 400       # top of the XR18 low-cut range (see FX-NOTES)
 logging:
   level: INFO            # DEBUG | INFO | WARNING | ERROR
   ring_size: 500

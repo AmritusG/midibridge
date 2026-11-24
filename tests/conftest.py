@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT))
 
 from bridge import logger  # noqa: E402
 from bridge.config import load  # noqa: E402
+from bridge.eq import EqMode  # noqa: E402
 from bridge.fx import FxMode  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location("bridge_main", ROOT / "bridge.py")
@@ -38,6 +39,7 @@ class FakeExtender:
         self.rings: list[tuple[int, int]] = []
         self.leds: list[tuple[str, int, bool]] = []
         self.scribble: dict[int, tuple[str, str, int]] = {}
+        self.scribble_flags: dict[int, int] = {}   # colour + text bits
         self.scribble_writes = 0
 
     def send_fader(self, strip, midi):
@@ -56,6 +58,7 @@ class FakeExtender:
         top = payload[7:14].decode().rstrip()
         bottom = payload[14:21].decode().rstrip()
         self.scribble[strip] = (top, bottom, colour)
+        self.scribble_flags[strip] = payload[6]
         self.scribble_writes += 1
 
     def last_ring(self, knob):
@@ -155,11 +158,14 @@ class Rig:
     fakes."""
 
     def __init__(self, cfg_path=CONFIG_YAML, setup_mode=True,
-                 fx_overrides=None, clock=None):
+                 fx_overrides=None, clock=None, eq_overrides=None):
         self.cfg = load(cfg_path)
         if fx_overrides:
             for k, v in fx_overrides.items():
                 setattr(self.cfg.fx_mode, k, v)
+        if eq_overrides:
+            for k, v in eq_overrides.items():
+                setattr(self.cfg.eq_mode, k, v)
         self.setup_mode = setup_mode
         self.motor = FakeExtender()
         self.link = FakeLink()
@@ -180,15 +186,27 @@ class Rig:
             scheduler=self.sched,
             clock=clock or TickClock(),
         )
+        self.eq = EqMode(
+            cfg.eq_mode, self.link,
+            ring_writer=lambda k, m: bridge_main._send_ring(
+                self.state, self.motor, k, m),
+            scribble_writer=lambda *a: bridge_main._write_scribble(
+                self.motor, *a),
+            restore=lambda: bridge_main.restore_after_fx(
+                self.state, self.motor, cfg.scribble, self.link),
+            scheduler=self.sched,
+            clock=clock or TickClock(),
+        )
+        bridge_main.link_modes(self.fx, self.eq)
         self.on_target = bridge_main.make_xr18_callback(
-            self.state, self.motor, self.fx)
+            self.state, self.motor, self.fx, self.eq)
         bridge_main.apply_scribble(cfg, self.motor)
 
     # Extender -> bridge
     def event(self, ev):
         bridge_main.handle_midi_event(
             ev, self.state, self.setup_mode, self.link, self.motor,
-            scribble_cfg=self.cfg.scribble, fx=self.fx)
+            scribble_cfg=self.cfg.scribble, fx=self.fx, eq=self.eq)
 
     def push(self, strip, pressed):
         from bridge.decoder import KnobPush
@@ -204,9 +222,32 @@ class Rig:
         self.push(strip, False)
         return fired
 
-    # mixer -> bridge
+    def eq_long_press(self):
+        k = self.cfg.eq_mode.hold_knob
+        self.push(k, True)
+        fired = self.sched.fire(delay=self.cfg.eq_mode.hold_s)
+        self.push(k, False)
+        return fired
+
+    # mixer -> bridge (both raw listeners, as XR18Link calls them)
     def mixer(self, address, *args):
         self.fx.on_osc(address, args)
+        self.eq.on_osc(address, args)
+
+    def warm_eq(self, on=1, hpon=1, hpf=0.0, bands=None):
+        """Simulate the EQ startup query replies (the venue XR18's state,
+        read 2026-11-24: band 1 LCut 158.9 Hz, 2 PEQ 496.6 Hz, 3 PEQ
+        1.98 kHz, 4 HCut 14.16 kHz, all 0 dB, Q 2.0)."""
+        bands = bands or {1: (0, 0.30, 0.5, 0.4648), 2: (2, 0.465, 0.5, 0.4648),
+                          3: (2, 0.665, 0.5, 0.4648), 4: (5, 0.95, 0.5, 0.4648)}
+        self.mixer("/ch/01/eq/on", on)
+        for b, (t, f, g, q) in bands.items():
+            self.mixer(f"/ch/01/eq/{b}/type", t)
+            self.mixer(f"/ch/01/eq/{b}/f", f)
+            self.mixer(f"/ch/01/eq/{b}/g", g)
+            self.mixer(f"/ch/01/eq/{b}/q", q)
+        self.mixer("/ch/01/preamp/hpon", hpon)
+        self.mixer("/ch/01/preamp/hpf", hpf)
 
     def warm(self, fx_type=6, params=None, send=0.5, rtn_on=1, rtn_lr=1,
              rtn_fader=0.75, fxsend_on=1, fxsend_fader=0.75):

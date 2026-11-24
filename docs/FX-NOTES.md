@@ -1,4 +1,4 @@
-# FX mode: facts and sources
+# FX mode and EQ mode: facts and sources
 
 Everything FX mode relies on, with the source next to each fact. Sources:
 
@@ -116,7 +116,62 @@ Neither [M] nor [C] says. The `/fx/N/par/NN` slots are reinterpreted for each ty
 
 ## Things to check in the live test (venue Pi)
 
-1. Turning knob 1 in FX mode moves X-Air Edit's *Ch 1 → FX1* send. If it doesn't, the mixer wants the short write form `/ch/01/mix/07` (the form PROTOCOL.md records for bus sends).
-2. The Extender rings follow when a value changes in X-Air Edit (CC 80-87). If they don't, the rings stay dark and everything else still works.
+1. Turning knob 1 in FX mode moves X-Air Edit's *Ch 1 → FX1* send. If it doesn't, the mixer wants the short write form `/ch/01/mix/07` (the form PROTOCOL.md records for bus sends). **Checked 2026-11-24 (XR18V2, FW 1.25): it moves. The `/level` write form works; no change needed.**
+2. The Extender rings follow when a value changes in X-Air Edit (CC 80-87). If they don't, the rings stay dark and everything else still works. **Checked 2026-11-24: the rings light and follow.**
 3. The values shown on the scribble strips match X-Air Edit's readouts (see the range disagreements above).
 4. Whether a type change in X-Air Edit keeps or resets the parameters (answers f).
+
+## Channel EQ
+
+Everything EQ mode (bridge/eq.py) relies on. Extra sources for this section:
+
+- **[O-eq]** OpenFader `crates/proto-xair/src/eq.rs` and `input.rs`. Their doc comments quote the XR18 firmware OSC map for FW 1.14 (xr-meters `parameters.txt`, taken from Behringer firmware) and xair-api-python `shared.py`, and the owner checked them on an XR18 with FW 1.20.
+- **[live]** The venue XR18 ("XR18-Bearbacka", XR18V2, **FW 1.25**), read on 2026-11-24 with plain queries and `/node` text queries (no writes during STEP 1). `/node` replies give the mixer's own readout in Hz/dB/Q next to the raw float, so they check each law directly.
+- **[M]**: Maillot's PDF could not be fetched this pass. The Google Drive and GitHub copies failed and the academia.edu copy needs a login. So this section has **no [M] page numbers**. Every fact below rests on [C], [MX], [O-eq] and the live mixer instead.
+
+### Addresses and value laws
+
+| Fact | Value | Source |
+|---|---|---|
+| Bands per channel | 4: `/ch/NN/eq/1..4` (bus/main have 6) | [MX] node list `/ch/01/eq/1..4`; [O-eq]; [live] `/node ch/01/eq` lists 4 bands |
+| EQ on/off | `/ch/NN/eq/on` int 0/1 | [C] `/ch/01/eq/on,i,0-1,"OFF, ON"`; [live] `1` |
+| Band type | `/ch/NN/eq/B/type` int 0..5 = **LCut, LShv, PEQ, VEQ, HShv, HCut** | [C] line 125; [O-eq] |
+| Band frequency | `/ch/NN/eq/B/f` float 0..1, **log, 20..20000 Hz, 201 points**: Hz = 20·1000^f | [C] `"20 - 20000"`; [O-eq] `f log(201)`; [live] f 0.30 → 158.9, 0.465 → 496.6, 0.665 → 1k98, 0.95 → 14k16 (exactly 20·1000^f) |
+| Band gain | `/ch/NN/eq/B/g` float 0..1, **linear, −15..+15 dB, 121 points** (0.25 dB grid); 0.5 = 0 dB | [C] `"-15.0 - +15.0"`; [O-eq] `g lin(121)`; [live] g 0.5 → 0.00 |
+| Band Q | `/ch/NN/eq/B/q` float 0..1, **log, reversed: 0 = Q 10, 1 = Q 0.3, 72 points**: Q = 10·0.03^q | [C] `"10.0 - 0.3"`; [O-eq] `q log(72)`; [live] q 0.4647887 (= 33/71, so a 72-point grid) → shown "2.0" (the law gives 1.96; the mixer prints one decimal) |
+| Low cut on/off | `/ch/NN/preamp/hpon` int 0/1 | [C] line 152; [O-eq] `input.rs`; [live] `1` |
+| Low cut frequency | `/ch/NN/preamp/hpf` float 0..1, **log, 20..400 Hz**, 101 points assumed | [O-eq] `log_set(20, 400)`, firmware map + xair-api; [live] hpf 0.04 → `/node` "22.5" Hz = 20·20^0.04 (a 20..200 law would give 21.9) |
+| Low cut slope | no `/ch/NN/preamp/hpslope` on the XR18 (query got no reply) | [live] |
+
+**Contradiction, resolved:** [C] gives the low-cut range as `"20 - 200"`, while [O-eq] (and the X32) give 20-400. The live mixer settles it as **20-400 Hz** (row above, measured after the on-site test moved the low cut). Only the displayed Hz depends on this; the wire value is always 0..1. `eq_mode.lowcut_max_hz` holds it. The 101-point grid for `hpf` is not confirmed by any source used. Values off the grid are accepted by the mixer, so a wrong guess only changes the step size slightly.
+
+### Band defaults on the venue XR18, and the band choice
+
+[live], 2026-11-24, channels 1 and 2 identical (so these look like the XR18's defaults):
+
+| Band | Type | Freq | Gain | Q |
+|---|---|---|---|---|
+| 1 | **LCut** (0) | 158.9 Hz | 0 dB | 2.0 |
+| 2 | PEQ (2) | 496.6 Hz | 0 dB | 2.0 |
+| 3 | PEQ (2) | 1.98 kHz | 0 dB | 2.0 |
+| 4 | **HCut** (5) | 14.16 kHz | 0 dB | 2.0 |
+
+A cut filter has no gain, so LOW and HIGH gain would do nothing on bands 1 and 4 as found. **Amrit's decision (2026-11-24): shelves on entry.** Entering EQ mode sets band 1 to LShv (1) and band 4 to HShv (4), keeping their frequencies, and logs the old type and frequency (kind `eq`, "band type changed…"). A mid band that is a cut becomes a PEQ. A PEQ/VEQ mid is left as it is. MID is band 3 (1.98 kHz, presence range for a head mic); band 2 is never written. On site the change ran as logged: `band=1 old_type=0:LCut`, `band=4 old_type=5:HCut`. Note that this removes the 159 Hz low cut and the 14 kHz high cut the defaults had. The preamp low cut (knob 8) can put a low cut back.
+
+### Step sizes (config `eq_mode`)
+
+| Knob | Per encoder click | On the mixer grid |
+|---|---|---|
+| Gain | 0.5 dB (`gain_step_db`) | 2 points of 121 |
+| Frequency | 0.1 octave (`freq_step_octaves`) | 2 points of 201 = 0.0997 oct (one grid point = 1/20 octave) |
+| Q | 1 mixer step (`q_steps`) | 1 point of 72 ≈ ×1.05; knob right = higher Q |
+| Low cut | 0.1 octave (`lowcut_step_octaves`) | 2 points of 101 ≈ 0.086 oct (20..400) |
+
+Turns snap to the grid, so the bridge's value always equals one the mixer can hold, and a value received from X-Air Edit continues from where it is.
+
+### Live check results (venue, 2026-11-24)
+
+a. Hold knob 2: strips turn red with LO G … LCUT: **yes**.
+b. Knobs 1 and 6 change low and high on Headmic 1, and X-Air Edit's Ch1 EQ follows: **yes, both**.
+c. Knob 8 push switches Ch1 EQ off and on in X-Air Edit: **yes**.
+After the test, the mixer read: band 1 LShv 105.0 Hz +0.50 dB, band 3 PEQ 2k43 0 dB, band 4 HShv 14k16 0 dB, EQ ON, low cut ON 22.5 Hz.

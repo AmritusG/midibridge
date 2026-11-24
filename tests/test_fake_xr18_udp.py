@@ -118,3 +118,45 @@ def test_hold_with_real_timer_thread():
     fxm.on_knob_push(1, True)
     assert _wait(lambda: fxm.active, 1.0)
     fxm.on_knob_push(1, False)
+
+
+def test_eq_mode_against_fake_xr18_over_udp():
+    """The venue XR18's ch 1 EQ (band 1 LCut, band 4 HCut) over real UDP:
+    shelves set as ints, a gain turn sent as a float, reset sends 0.5."""
+    from bridge.eq import EqMode, EqModeConfig
+    bands = {1: (0, 0.30), 2: (2, 0.465), 3: (2, 0.665), 4: (5, 0.95)}
+    table = {"/ch/01/eq/on": 1, "/ch/01/preamp/hpon": 1,
+             "/ch/01/preamp/hpf": 0.0}
+    for b, (t, f) in bands.items():
+        table.update({f"/ch/01/eq/{b}/type": t, f"/ch/01/eq/{b}/f": f,
+                      f"/ch/01/eq/{b}/g": 0.5, f"/ch/01/eq/{b}/q": 33 / 71})
+    mixer = FakeXR18(table)
+    link = XR18Link("127.0.0.1", mixer.port, 0)
+    rings = {}
+    eqm = EqMode(EqModeConfig(enabled=True), link,
+                 ring_writer=lambda k, m: rings.__setitem__(k, m),
+                 scribble_writer=lambda *a: None, restore=lambda: None)
+    link.add_listener(eqm.on_osc)
+    link.start()
+    try:
+        eqm.startup_queries()
+        assert _wait(lambda: len(eqm.vals) == len(eqm.addresses))
+        eqm.enter()
+        assert _wait(lambda: mixer.table["/ch/01/eq/1/type"] == 1
+                     and mixer.table["/ch/01/eq/4/type"] == 4)
+        eqm.on_knob_turn(6, rings[6] + 1)          # high gain +0.5 dB
+        eqm.on_knob_push(5, True)                  # reset high band
+        eqm.on_knob_push(8, True)                  # EQ off
+        assert _wait(lambda: mixer.table["/ch/01/eq/on"] == 0)
+        w = {a: (v, d) for a, v, d in mixer.writes}
+        assert b",i" in w["/ch/01/eq/1/type"][1]
+        assert b",i" in w["/ch/01/eq/on"][1]
+        g = [(v, d) for a, v, d in mixer.writes if a == "/ch/01/eq/4/g"]
+        assert abs(g[0][0] - (0.5 + 2 / 120)) < 1e-6 and b",f" in g[0][1]
+        assert g[-1][0] == 0.5
+        assert {a for a, *_ in mixer.writes} == {
+            "/ch/01/eq/1/type", "/ch/01/eq/4/type", "/ch/01/eq/4/g",
+            "/ch/01/eq/on"}
+    finally:
+        link.stop()
+        mixer.close()

@@ -25,6 +25,7 @@ Drag a fader on any surface — every other surface mirrors instantly.
 - **Per-channel preamp gain (trim)** on knobs (toggleable lock for live use)
 - **Colored scribble strips** — Behringer's proprietary SysEx protocol, fully documented in [PROTOCOL.md](PROTOCOL.md)
 - **FX mode** — hold knob 1 for a second and the knobs become a reverb editor: knob 1 sets channel 1's send into FX 1, knobs 2-8 set the reverb's parameters, and the scribble strips show names and live values. See [FX mode](#fx-mode-reverb-on-the-knobs)
+- **EQ mode** — hold knob 2 for a second and the knobs become a low/mid/high EQ for channel 1, plus its low cut. See [EQ mode](#eq-mode-channel-1-eq-on-the-knobs)
 - **Bus mode** — press Select 1-6 to enter "sends on fader" mode for each aux bus, perfect for dialing in room-fill or monitor mixes during sound check
 - **Master mirror** — make one fader drive multiple targets (e.g. Main LR + 6 aux bus masters in lockstep)
 - **Transparent OSC proxy** — multiple software clients (X-Air Edit, Mixing Station, custom OSC apps) point at the Pi and stay in live sync with each other and with the hardware surface. Auto-discovery, no per-client config
@@ -127,6 +128,7 @@ See `config.example.yaml` for the full annotated config. Key sections:
 - **`scribble`** — strip labels, background colors, text shade
 - **`mirror`** — fan out one fader's value to multiple targets (e.g. Main → all 6 aux buses)
 - **`fx_mode`** — FX mode on/off, hold time, FX slot, channel, default reverb, per-reverb knob maps, scribble colour
+- **`eq_mode`** — EQ mode on/off, hold knob and time, channel, which EQ bands are low/mid/high, knob map, the two pushes, step sizes, scribble colour
 - **`lock_trim_in_operation_mode`** — set `true` to require `--setup` for trim adjustments
 
 ### Plug-and-play deployment
@@ -155,6 +157,63 @@ Hold knob 1 again to leave. The reverb and the send stay exactly as set, and the
 
 Changes made in X-Air Edit while FX mode is on (parameters, send, even the FX type) show up on the rings and strips. Knob turns in FX mode are relative, so a knob never jumps a value. The facts behind all of this, with sources, are in [docs/FX-NOTES.md](docs/FX-NOTES.md).
 
+## EQ mode (channel 1 EQ on the knobs)
+
+Hold **knob 2** pushed in for about a second (`eq_mode.hold_s`). The scribble strips turn red and the knobs take over channel 1's EQ (Headmic 1 at the venue):
+
+| Knob | Strip | In EQ mode |
+|---|---|---|
+| 1 | LO G | low shelf gain (band 1), 0.5 dB per click, −15 to +15 dB |
+| 2 | LO F | low shelf frequency, about 1/10 octave per click, 20 Hz to 20 kHz |
+| 3 | MID G | mid gain (band 3), 0.5 dB per click |
+| 4 | MID F | mid frequency, about 1/10 octave per click |
+| 5 | MID Q | mid Q, one mixer step (~5 %) per click; right = narrower, 0.3 to 10 |
+| 6 | HI G | high shelf gain (band 4), 0.5 dB per click |
+| 7 | HI F | high shelf frequency, about 1/10 octave per click |
+| 8 | LCUT | channel low cut frequency, 20 to 400 Hz. Turning it while the low cut is off switches it on |
+| 5, short push | | the band of the knob you turned last goes back to 0 dB |
+| 8, short push | | channel 1 EQ off / on, to compare (the EQ strips' top row changes shade while it is off) |
+
+The strips show the name on top and the live value with its unit below. The rings show the values. Changes made in X-Air Edit while EQ mode is on show up on the rings and strips. Knob turns are relative, so a knob never jumps a value.
+
+**Band types.** The XR18 channel EQ has four bands. A new XR18 channel has band 1 as a low *cut* and band 4 as a high *cut*, and a cut has no gain. So on entry, EQ mode makes band 1 a low shelf and band 4 a high shelf, keeping their frequencies. The old type goes to the `/debug` ring log. Band 2 is never touched. Set `shelves_on_entry: false` to keep the band types as they are, and use `low_band`, `mid_band` and `high_band` to pick other bands.
+
+Hold knob 2 again to leave. The EQ stays exactly as set, and the knobs, rings and strips go back to what they were. EQ mode and FX mode never run at the same time: holding knob 1 inside EQ mode goes straight to FX mode, and holding knob 2 inside FX mode goes straight to EQ mode. EQ mode only ever writes channel 1's EQ and low cut. Faders, mutes, the mirror map, bus mode, trim and FX settings are not touched. Everything in the knob map, both pushes and the step sizes is in `eq_mode` in `config.yaml`. The facts behind it, with sources, are in [docs/FX-NOTES.md](docs/FX-NOTES.md#channel-eq).
+
+## Every knob and push at a glance
+
+| Control | Normal | FX mode | EQ mode |
+|---|---|---|---|
+| Knob 1 turn | trim ch 1 | ch 1 → FX 1 send | LO G |
+| Knob 2 turn | trim ch 2 | reverb parameter | LO F |
+| Knob 3 turn | trim ch 3 | reverb parameter | MID G |
+| Knob 4 turn | trim ch 4 | reverb parameter | MID F |
+| Knob 5 turn | trim ch 5 | reverb parameter | MID Q |
+| Knob 6 turn | trim ch 6 | reverb parameter | HI G |
+| Knob 7 turn | trim ch 7 | reverb parameter | HI F |
+| Knob 8 turn | **free** | reverb parameter | LCUT (low cut) |
+| Knob 1 hold (1 s) | FX mode on | FX mode off | to FX mode |
+| Knob 2 hold (1 s) | EQ mode on | to EQ mode | EQ mode off |
+| Knob 1 short push | — | — | — |
+| Knob 2 short push | — | — | — |
+| Knob 3 push | **free** | **free** | **free** |
+| Knob 4 push | **free** | **free** | **free** |
+| Knob 5 push | **free** | **free** | reset last band to 0 dB |
+| Knob 6 push | **free** | **free** | **free** |
+| Knob 7 push | **free** | **free** | **free** |
+| Knob 8 push | **free** | next reverb type | EQ on/off |
+
+Trim knobs work in operation mode unless `lock_trim_in_operation_mode` is true. Knob 1 and knob 2 pushes are taken by the two holds (a short push does nothing), so they are not free for other uses. Knobs 3, 4, 6 and 7 pushes are free in every mode, as are knob 5 and 8 pushes outside the modes that use them.
+
+## Editing the settings on the Pi
+
+The bridge reads `~/midibridge/config.yaml` on the Pi at start. To change a setting (a label, a colour, a knob map, a step size):
+
+1. `mdd-cfg` (from [`scripts/aliases.sh`](scripts/aliases.sh)), or `ssh admin@mididodi.local` and then `nano ~/midibridge/config.yaml`.
+2. Save, then `mdd-restart` (or `sudo systemctl restart midibridge`). The bridge checks the file at start; if it does not come back, `mdd-tail` shows why.
+
+**The Mac's `config.yaml` must be kept equal to the card's.** The card's file is the source of truth (the venue has `xr18.ip: 192.168.0.100` and its own scribble labels). Re-provisioning the Pi copies the Mac's file onto the card, so after editing on the Pi, copy it back: `scp -p admin@mididodi.local:midibridge/config.yaml config.yaml`. `config.yaml` is not in git; `tests/fixtures/venue.yaml` is a committed copy (with `ip: auto`) that a test checks against it.
+
 ## Operation vs Setup modes
 
 - **Operation mode** (`bridge.py` with no flag): faders and mutes work, knobs are locked, Select buttons do nothing. Safe for venue staff.
@@ -169,12 +228,12 @@ A few hard-won discoveries are documented in [PROTOCOL.md](PROTOCOL.md):
 - The XR18 listens for OSC writes on port **10024**, not 10023 (despite some docs saying otherwise)
 - Asymmetric zero-padding: `/ch/01/...` is padded, but `/bus/1/...` and `/dca/1/...` are not
 - Behringer scribble strips use a proprietary SysEx format with manufacturer ID `00 20 32` (not the Mackie ID `00 00 66`)
-- The mixer notifies subscribers of channel sends at `/ch/NN/mix/MM/level` (with trailing `/level`), but you write to `/ch/NN/mix/MM` (no suffix)
+- The mixer notifies subscribers of channel sends at `/ch/NN/mix/MM/level` (with trailing `/level`), but you write to `/ch/NN/mix/MM` (no suffix). The XR18V2 on FW 1.25 also takes writes to the `/level` form (FX mode uses it; checked 2026-11-24)
 - X-Air Edit and Mixing Station don't honestly subscribe via `/xremote`, which is why state changes from other clients never reach them when connected directly to the mixer. The bridge fixes this by subscribing on their behalf and fanning state out.
 
 ## Known limitations
 
-- **LED rings: not yet confirmed on hardware.** The Mackie CC 48-55 range is ignored in Ctrl mode. The bridge now drives the rings on the encoders' own CCs (80-87, absolute 0-127), following Behringer's Ctrl-mode MIDI implementation (see [docs/FX-NOTES.md](docs/FX-NOTES.md)). If your Extender doesn't light the rings from software, everything else still works. The Extender lights its own rings during physical turns.
+- **LED rings** are driven on the encoders' own CCs (80-87, absolute 0-127), following Behringer's Ctrl-mode MIDI implementation (see [docs/FX-NOTES.md](docs/FX-NOTES.md)). The Mackie CC 48-55 range is ignored in Ctrl mode. Confirmed on the venue Extender on 2026-11-24: the rings light and follow in FX and EQ mode.
 - The Behringer X-Touch (full version, not Extender) likely needs different SysEx for scribble strips and may need different CC ranges for some controls. Untested.
 - The bridge has no UI beyond the debug HTTP page. Reconfiguration requires editing YAML and restarting.
 
@@ -184,7 +243,10 @@ A few hard-won discoveries are documented in [PROTOCOL.md](PROTOCOL.md):
 bridge.py              — main entry, event loop, mode state machine
 bridge/
   config.py            — YAML loader
+  knob_editor.py       — shared base of FX and EQ mode: hold timer, relative
+                         turns, ring and scribble painting
   fx.py                — FX mode: reverb tables, knob maps, state machine
+  eq.py                — EQ mode: channel EQ laws, knob map, state machine
   targets.py           — target type system (channel/bus/dca/trim/mute/send)
   decoder.py           — MIDI → event objects
   extender.py          — MIDI port management, motor/LED/scribble output
