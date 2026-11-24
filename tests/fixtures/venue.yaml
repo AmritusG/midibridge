@@ -61,12 +61,12 @@ mutes:
 scribble:
   1: {top: "Headmic",  bottom: "   1",  background: magenta}
   2: {top: "Headmic",  bottom: "   2",  background: magenta}
-  3: {top: "   BT",  bottom: "  Left",  background: blue}
-  4: {top: "   BT",  bottom: " Right",  background: blue}
+  3: {top: "  BT",  bottom: " Left",  background: blue}
+  4: {top: "  BT",  bottom: " Right",  background: blue}
   5: {top: "Laptop",  bottom: "Left",  background: white}
   6: {top: "Laptop",  bottom: "Right",  background: white}
   7: {top: "Handmic",  bottom: "",  background: magenta}
-  8: {top: "MASTER",  bottom: "   LR",     background: green,    top_text: light, bottom_text: light}
+  8: {top: "MASTER",  bottom: "  LR",  background: green,  top_text: light,  bottom_text: light}
 
 # HTTP debug server. Visit http://<pi-ip>:8080/debug
 debug_port: 8080

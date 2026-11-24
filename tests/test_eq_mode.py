@@ -408,7 +408,7 @@ def test_leaving_restores_scribbles_rings_and_trim_and_keeps_eq(rig):
     rig.eq_long_press()
     assert not rig.eq.active
     assert rig.motor.scribble[1] == ("Headmic", "   1", MAGENTA)
-    assert rig.motor.scribble[3][:2] == ("   BT", "  Left")
+    assert rig.motor.scribble[3][:2] == ("  BT", " Left")
     assert rig.motor.scribble[8][0] == "MASTER"
     assert rig.motor.last_ring(1) == round(0.4 * 127)
     assert rig.motor.last_ring(2) == round(0.6 * 127)
